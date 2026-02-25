@@ -171,24 +171,35 @@ async function connectWhatsApp() {
     if (connection === 'close') {
       isReady = false;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut; // 401
+      const isReplaced = statusCode === 440; // conexion reemplazada por otra sesion
 
       console.log('Desconectado. Codigo:', statusCode);
 
-      if (shouldReconnect) {
-        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-          console.error(`Maximo de reconexiones (${MAX_RECONNECT_ATTEMPTS}) alcanzado. Deteniendo.`);
-          console.error('Revisa los secrets de Supabase y que las tablas existan, luego reinicia el Space.');
-          return;
-        }
-        reconnectAttempts++;
-        const delay = Math.min(5000 * reconnectAttempts, 60000); // 5s, 10s, ... max 60s
-        console.log(`Reconectando en ${delay / 1000}s... (intento ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-        await new Promise(r => setTimeout(r, delay));
-        await connectWhatsApp();
-      } else {
-        console.log('Sesion cerrada. Elimina la tabla auth_sessions en Supabase y reinicia.');
+      if (isLoggedOut) {
+        console.log('Sesion cerrada (logout). Ejecuta DELETE FROM auth_sessions en Supabase y reinicia.');
+        return;
       }
+
+      if (isReplaced) {
+        // 440: otra instancia/sesion nos reemplazo. Esperar 30s antes de reconectar
+        // para que la sesion competidora muera y no entrar en loop.
+        console.log('Conexion reemplazada (440). Esperando 30s antes de reconectar...');
+        await new Promise(r => setTimeout(r, 30000));
+        reconnectAttempts = 0;
+        await connectWhatsApp();
+        return;
+      }
+
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        console.error(`Maximo de reconexiones (${MAX_RECONNECT_ATTEMPTS}) alcanzado. Deteniendo.`);
+        return;
+      }
+      reconnectAttempts++;
+      const delay = Math.min(5000 * reconnectAttempts, 60000);
+      console.log(`Reconectando en ${delay / 1000}s... (intento ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+      await new Promise(r => setTimeout(r, delay));
+      await connectWhatsApp();
     }
 
     if (connection === 'open') {
