@@ -88,6 +88,18 @@ async function testNetworkConnectivity() {
 // Conectar WhatsApp con Baileys
 // ============================================
 async function connectWhatsApp() {
+  // Cerrar socket anterior antes de crear uno nuevo.
+  // Sin esto, WhatsApp ve dos conexiones del mismo dispositivo y manda 440 al nuevo.
+  if (sock) {
+    try {
+      sock.ev.removeAllListeners();
+      sock.end(undefined);
+    } catch (_) {}
+    sock = null;
+    // Dar tiempo a WhatsApp para registrar que la conexión anterior cerró
+    await new Promise(r => setTimeout(r, 2000));
+  }
+
   let state, saveCreds;
 
   if (USE_SUPABASE_AUTH) {
