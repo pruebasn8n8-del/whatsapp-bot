@@ -357,6 +357,15 @@ async function main() {
     console.log(`Health: http://localhost:${PORT}/health\n`);
   });
 
+  // Esperar a que Koyeb (o cualquier plataforma con rolling deploy) termine de matar
+  // el container anterior antes de conectar a WhatsApp. Sin este delay, ambos containers
+  // intentan conectar con las mismas credenciales → error 440 en loop.
+  const startupDelay = parseInt(process.env.STARTUP_DELAY_MS || '15000');
+  if (startupDelay > 0) {
+    console.log(`Esperando ${startupDelay / 1000}s para que el container anterior cierre (anti-440)...`);
+    await new Promise(r => setTimeout(r, startupDelay));
+  }
+
   await connectWhatsApp();
 }
 
