@@ -19,7 +19,7 @@ if (process.env.GOOGLE_CREDENTIALS_BASE64) {
   }
 }
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
 const { useSupabaseAuthState } = require('./supabaseAuthState');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
@@ -72,12 +72,22 @@ async function connectWhatsApp() {
   }
 
   const { version } = await fetchLatestBaileysVersion();
+  console.log('Baileys version:', version.join('.'));
 
   sock = makeWASocket({
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['WhatsApp Bot Hub', 'Chrome', '120.0.0'],
+    browser: Browsers.ubuntu('Chrome'),
+    connectTimeoutMs: 60_000,
+    defaultQueryTimeoutMs: undefined,
+    keepAliveIntervalMs: 25_000,
+    markOnlineOnConnect: false,
+    syncFullHistory: false,
+    retryRequestDelayMs: 350,
+    maxMsgRetryCount: 5,
+    generateHighQualityLinkPreview: false,
+    getMessage: async () => ({ conversation: '' }),
   });
 
   // Guardar credenciales cuando se actualicen
