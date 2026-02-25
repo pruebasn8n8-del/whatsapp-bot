@@ -81,37 +81,36 @@ async function connectWhatsApp() {
   // Guardar credenciales cuando se actualicen
   sock.ev.on('creds.update', saveCreds);
 
-  // Si se usa pairing code y la sesion no esta registrada, solicitarlo
-  if (USE_PAIRING_CODE && !sock.authState.creds.registered) {
-    const phone = (process.env.MY_NUMBER || '').replace(/[^0-9]/g, '');
-    if (!phone) {
-      console.error('MY_NUMBER no esta configurado. No se puede solicitar pairing code.');
-    } else {
-      // Esperar un momento para que el socket se inicialice
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      try {
-        const code = await sock.requestPairingCode(phone);
-        console.log('\n' + '='.repeat(40));
-        console.log(`PAIRING CODE: ${code}`);
-        console.log('='.repeat(40));
-        console.log('Ve a WhatsApp > Ajustes > Dispositivos vinculados');
-        console.log('> Vincular dispositivo > Vincular con numero de telefono');
-        console.log(`Ingresa el codigo: ${code}`);
-        console.log('='.repeat(40) + '\n');
-      } catch (err) {
-        console.error('Error solicitando pairing code:', err.message);
-      }
-    }
-  }
-
   // Manejar estado de conexion
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr && !USE_PAIRING_CODE) {
-      console.log('\nEscanea este codigo QR con WhatsApp:\n');
-      qrcode.generate(qr, { small: true });
-      console.log('\nAbre WhatsApp > Dispositivos vinculados > Vincular dispositivo\n');
+    // Cuando Baileys genera el QR significa que ya esta listo para autenticar.
+    // En modo pairing code lo interceptamos aqui y pedimos el codigo en su lugar.
+    if (qr) {
+      if (USE_PAIRING_CODE && !sock.authState.creds.registered) {
+        const phone = (process.env.MY_NUMBER || '').replace(/[^0-9]/g, '');
+        if (phone) {
+          try {
+            const code = await sock.requestPairingCode(phone);
+            console.log('\n' + '='.repeat(40));
+            console.log('PAIRING CODE: ' + code);
+            console.log('='.repeat(40));
+            console.log('Ve a WhatsApp > Ajustes > Dispositivos vinculados');
+            console.log('> Vincular dispositivo > Vincular con numero de telefono');
+            console.log('Ingresa el codigo: ' + code);
+            console.log('='.repeat(40) + '\n');
+          } catch (err) {
+            console.error('Error solicitando pairing code:', err.message);
+          }
+        } else {
+          console.error('MY_NUMBER no esta configurado.');
+        }
+      } else {
+        console.log('\nEscanea este codigo QR con WhatsApp:\n');
+        qrcode.generate(qr, { small: true });
+        console.log('\nAbre WhatsApp > Dispositivos vinculados > Vincular dispositivo\n');
+      }
     }
 
     if (connection === 'close') {
