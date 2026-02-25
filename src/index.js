@@ -54,6 +54,8 @@ const USE_SUPABASE_AUTH = process.env.SUPABASE_AUTH === 'true';
 
 let sock = null;
 let isReady = false;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
 
 // ============================================
 // Conectar WhatsApp con Baileys
@@ -121,15 +123,24 @@ async function connectWhatsApp() {
       console.log('Desconectado. Codigo:', statusCode);
 
       if (shouldReconnect) {
-        console.log('Reconectando...');
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+          console.error(`Maximo de reconexiones (${MAX_RECONNECT_ATTEMPTS}) alcanzado. Deteniendo.`);
+          console.error('Revisa los secrets de Supabase y que las tablas existan, luego reinicia el Space.');
+          return;
+        }
+        reconnectAttempts++;
+        const delay = Math.min(5000 * reconnectAttempts, 60000); // 5s, 10s, ... max 60s
+        console.log(`Reconectando en ${delay / 1000}s... (intento ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+        await new Promise(r => setTimeout(r, delay));
         await connectWhatsApp();
       } else {
-        console.log('Sesion cerrada. Elimina auth_info/ (o la tabla auth_sessions en Supabase) y reinicia.');
+        console.log('Sesion cerrada. Elimina la tabla auth_sessions en Supabase y reinicia.');
       }
     }
 
     if (connection === 'open') {
       isReady = true;
+      reconnectAttempts = 0;
       console.log('WhatsApp conectado y listo!');
       console.log('Mi JID:', sock.user?.id);
       console.log('Modelo IA:', groqService.model);
