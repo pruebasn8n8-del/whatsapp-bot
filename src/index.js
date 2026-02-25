@@ -56,6 +56,7 @@ let sock = null;
 let isReady = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
+let pairingCodeRequested = false;
 
 // ============================================
 // Test de red - verifica que podamos llegar a WhatsApp
@@ -133,9 +134,14 @@ async function connectWhatsApp() {
     // En modo pairing code lo interceptamos aqui y pedimos el codigo en su lugar.
     if (qr) {
       if (USE_PAIRING_CODE && !sock.authState.creds.registered) {
+        if (pairingCodeRequested) {
+          console.log('Esperando que ingreses el pairing code... (ya fue enviado)');
+          return;
+        }
         const phone = (process.env.MY_NUMBER || '').replace(/[^0-9]/g, '');
         if (phone) {
           try {
+            pairingCodeRequested = true;
             const code = await sock.requestPairingCode(phone);
             console.log('\n' + '='.repeat(40));
             console.log('PAIRING CODE: ' + code);
@@ -145,12 +151,13 @@ async function connectWhatsApp() {
             console.log('Ingresa el codigo: ' + code);
             console.log('='.repeat(40) + '\n');
           } catch (err) {
+            pairingCodeRequested = false;
             console.error('Error solicitando pairing code:', err.message);
           }
         } else {
           console.error('MY_NUMBER no esta configurado.');
         }
-      } else {
+      } else if (!USE_PAIRING_CODE) {
         console.log('\nEscanea este codigo QR con WhatsApp:\n');
         qrcode.generate(qr, { small: true });
         console.log('\nAbre WhatsApp > Dispositivos vinculados > Vincular dispositivo\n');
@@ -183,6 +190,7 @@ async function connectWhatsApp() {
     if (connection === 'open') {
       isReady = true;
       reconnectAttempts = 0;
+      pairingCodeRequested = false;
       console.log('WhatsApp conectado y listo!');
       console.log('Mi JID:', sock.user?.id);
       console.log('Modelo IA:', groqService.model);
