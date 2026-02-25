@@ -57,6 +57,8 @@ let isReady = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 let pairingCodeRequested = false;
+let currentPairingCode = null;
+let pairingCodeGeneratedAt = null;
 
 // ============================================
 // Test de red - verifica que podamos llegar a WhatsApp
@@ -143,6 +145,8 @@ async function connectWhatsApp() {
           try {
             pairingCodeRequested = true;
             const code = await sock.requestPairingCode(phone);
+            currentPairingCode = code;
+            pairingCodeGeneratedAt = new Date();
             console.log('\n' + '='.repeat(40));
             console.log('PAIRING CODE: ' + code);
             console.log('='.repeat(40));
@@ -191,6 +195,8 @@ async function connectWhatsApp() {
       isReady = true;
       reconnectAttempts = 0;
       pairingCodeRequested = false;
+      currentPairingCode = null;
+      pairingCodeGeneratedAt = null;
       console.log('WhatsApp conectado y listo!');
       console.log('Mi JID:', sock.user?.id);
       console.log('Modelo IA:', groqService.model);
@@ -214,6 +220,17 @@ async function connectWhatsApp() {
 const app = express();
 const PORT = process.env.PORT || 7860;
 app.use(express.json());
+
+app.get('/pairing-code', (req, res) => {
+  if (isReady) return res.json({ status: 'connected', code: null });
+  if (!currentPairingCode) return res.json({ status: 'waiting', code: null });
+  res.json({
+    status: 'pending',
+    code: currentPairingCode,
+    generatedAt: pairingCodeGeneratedAt,
+    instructions: 'WhatsApp > Ajustes > Dispositivos vinculados > Vincular con numero de telefono',
+  });
+});
 
 app.get('/', (req, res) => {
   const active = getActiveBot();
@@ -263,6 +280,13 @@ app.get('/', (req, res) => {
     <div class="row info">
       <span>Auth mode:</span>&nbsp;<code>${USE_SUPABASE_AUTH ? 'Supabase' : 'Archivo local'}</code>
     </div>
+    ${currentPairingCode ? `
+    <div class="section">Vinculacion pendiente</div>
+    <div style="background:#1e3a2f;border:1px solid #22c55e;border-radius:10px;padding:18px;margin-bottom:8px;text-align:center">
+      <div style="font-size:.8rem;color:#86efac;margin-bottom:8px">PAIRING CODE — ingresalo en WhatsApp</div>
+      <div style="font-size:2rem;font-weight:bold;letter-spacing:6px;color:#4ade80;font-family:monospace">${currentPairingCode}</div>
+      <div style="font-size:.75rem;color:#6b7280;margin-top:10px">WhatsApp › Ajustes › Dispositivos vinculados<br>› Vincular dispositivo › Vincular con número de teléfono</div>
+    </div>` : ''}
     <div class="section">Comandos Admin</div>
     <div class="cmd">/bot &nbsp;&nbsp;&nbsp;- Seleccionar bot</div>
     <div class="cmd">/stop &nbsp;&nbsp;- Desactivar bot</div>
