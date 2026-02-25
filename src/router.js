@@ -46,6 +46,9 @@ function setupRouter(sock, groqService) {
         const isGroup = jid.endsWith('@g.us');
         if (isGroup) continue; // Solo chats individuales
 
+        // Ignorar mensajes enviados POR el bot (evita que responda a sus propios mensajes)
+        if (msg.key.fromMe) continue;
+
         const body = getMessageText(msg);
         const interactive = getInteractiveResponse(msg);
 
