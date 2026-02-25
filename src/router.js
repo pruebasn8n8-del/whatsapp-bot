@@ -78,7 +78,7 @@ function setupRouter(sock, groqService) {
         const pushName = msg.pushName || null;
 
         if (body || interactive) {
-          console.log(`[Router] ${isAdmin(jid) ? '[ADMIN]' : '[USER]'} jid=${jid} texto="${(body || '').substring(0, 50)}"`);
+          console.log(`[Router] ${isAdmin(jid) ? '[ADMIN]' : '[USER]'} jid=${jid} nombre="${pushName || ''}" texto="${(body || '').substring(0, 50)}"`);
         }
 
         // Marcar mensaje como leído
