@@ -62,12 +62,11 @@ function setupRouter(sock, groqService) {
         // Ignorar mensajes del bot (zero-width prefix)
         if (body.startsWith(PREFIX)) continue;
 
-        // fromMe: ignorar respuestas del bot a terceros.
-        // Permitir mensajes del admin a sí mismo (comandos desde su propio WhatsApp).
-        if (msg.key.fromMe) {
-          if (!isAdmin(jid)) continue; // Bot respondiendo a otros → ignorar
-          if (!body && !interactive) continue; // Audio/imagen enviado por el bot al admin → ignorar
-        }
+        // fromMe=true significa que el mensaje lo envió ESTA cuenta (el admin desde su teléfono).
+        // Solo procesamos si tiene texto y no es una respuesta del propio bot (PREFIX).
+        // Cualquier fromMe con texto = comando del admin, independiente del formato @lid del JID.
+        const isSelfCommand = msg.key.fromMe && !!body && !body.startsWith(PREFIX);
+        if (msg.key.fromMe && !isSelfCommand) continue; // Bot enviando sin texto → ignorar
 
         const text = body.trim();
         const textLower = text.toLowerCase();
@@ -83,7 +82,7 @@ function setupRouter(sock, groqService) {
         // ============================================
         // FLUJO ADMIN - Comandos privilegiados
         // ============================================
-        if (isAdmin(jid)) {
+        if (isAdmin(jid) || isSelfCommand) {
           // Ignorar mensajes propios que no sean comandos si no hay bot activo
           // (el admin puede usar el bot normalmente si activa groq)
 
