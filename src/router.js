@@ -9,7 +9,7 @@ const { getMessageText, getInteractiveResponse, sendButtonMessage, PREFIX } = re
 const {
   getOnboardingState,
   startOnboarding,
-  completeOnboarding,
+  handleOnboardingStep,
   loadPersonalityIfNeeded,
   updatePersonality,
 } = require('./onboarding');
@@ -279,18 +279,12 @@ function setupRouter(sock, groqService) {
         const onboardingState = await getOnboardingState(jid);
 
         if (onboardingState === 'new') {
-          // Primera vez: iniciar onboarding
           await startOnboarding(sock, jid, pushName);
           continue;
         }
 
-        if (onboardingState === 'pending') {
-          // Esperando que el usuario defina su personalidad
-          if (!text || text.length < 3) {
-            await sock.sendMessage(jid, { text: 'Por favor describe cómo quieres que sea tu asistente (mínimo 3 caracteres).' });
-            continue;
-          }
-          await completeOnboarding(sock, jid, text, groqService, pushName);
+        if (onboardingState === 'in_progress') {
+          await handleOnboardingStep(sock, jid, text, groqService);
           continue;
         }
 

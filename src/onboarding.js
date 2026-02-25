@@ -1,90 +1,165 @@
-// src/onboarding.js - Flujo de bienvenida para nuevos contactos
+// src/onboarding.js - Onboarding conversacional multi-paso estilo OpenClaw
 const { getContact, setPersonality, upsertContact } = require('./contactsDb');
 
-// Contactos esperando ingresar su personalidad: jid -> { step, timestamp }
-const _pendingOnboarding = new Map();
-const ONBOARDING_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos
+// Estado en memoria: jid -> { step, data, timestamp }
+const _sessions = new Map();
+const TIMEOUT_MS = 15 * 60 * 1000; // 15 minutos para completar el onboarding
 
-const WELCOME_MESSAGE = `¡Hola! 👋 Soy tu asistente personal de WhatsApp.
+const STEPS = {
+  WELCOME: 'welcome',       // Pregunta para qué quiere usar el asistente
+  NAME: 'name',             // Cómo lo llamo a él
+  VIBE: 'vibe',             // Tono: formal, casual, técnico, etc.
+  CONFIRM: 'confirm',       // Resumen y confirmación
+};
 
-Antes de comenzar, quiero conocer tus preferencias para darte la mejor experiencia.
+// ============================================
+// Mensajes de cada paso
+// ============================================
 
-*¿Cómo te gustaría que fuera mi personalidad?*
+const MSG_WELCOME = (pushName) =>
+  `Hola${pushName ? ' ' + pushName : ''} 👋 Acabo de conectarme.\n\n` +
+  `Soy tu asistente personal de WhatsApp. Para darte la mejor experiencia, ` +
+  `cuéntame un poco.\n\n` +
+  `*¿Para qué quieres usar tu asistente?*\n\n` +
+  `Puedes escribir algo como:\n` +
+  `• _Ayuda con el trabajo y correos_\n` +
+  `• _Aprender cosas nuevas y curiosidades_\n` +
+  `• _Programación y tecnología_\n` +
+  `• _Apoyo emocional y consejos de vida_\n` +
+  `• _De todo un poco_`;
 
-Puedes escribir algo como:
-• _Formal y profesional, experto en derecho_
-• _Casual y divertido, me gusta el humor_
-• _Experto en programación y tecnología_
-• _Coach de vida motivacional_
-• _Asistente general en español colombiano_
+const MSG_NAME = (uso) =>
+  `Genial, me queda claro 👌\n\n` +
+  `*¿Cómo prefieres que te llame?*\n` +
+  `_(Solo tu nombre o apodo)_`;
 
-✍️ Escribe ahora cómo quieres que sea tu asistente:`;
+const MSG_VIBE = (nombre) =>
+  `Un gusto, *${nombre}* 😊\n\n` +
+  `*¿Cómo prefieres que te hable?*\n\n` +
+  `1️⃣ Casual y relajado (como un amigo)\n` +
+  `2️⃣ Profesional y directo\n` +
+  `3️⃣ Técnico y preciso\n` +
+  `4️⃣ Divertido con humor\n\n` +
+  `Responde con el número o descríbelo a tu manera.`;
 
-const CONFIRM_MESSAGE = (personality) =>
-  `✅ *¡Perfecto!* He guardado tu configuración.\n\n` +
-  `Tu asistente ahora es: _${personality.substring(0, 80)}${personality.length > 80 ? '...' : ''}_\n\n` +
-  `Puedes cambiar mi personalidad en cualquier momento escribiendo:\n` +
-  `*/miperfil <nueva descripción>*\n\n` +
-  `¿En qué puedo ayudarte hoy? 😊`;
+const MSG_CONFIRM = (nombre, uso, vibe) =>
+  `Todo listo, ${nombre} ✅\n\n` +
+  `Así es como te voy a atender:\n` +
+  `• *Para:* ${uso}\n` +
+  `• *Tono:* ${vibe}\n\n` +
+  `Puedes cambiar esto cuando quieras con */miperfil*\n\n` +
+  `¿En qué te puedo ayudar hoy? 🚀`;
+
+// ============================================
+// Mapear respuesta de vibe a texto
+// ============================================
+function parseVibe(text) {
+  const t = text.trim().toLowerCase();
+  if (t === '1' || t.includes('casual') || t.includes('amigo') || t.includes('relajad')) return 'casual y relajado, como hablarle a un amigo';
+  if (t === '2' || t.includes('profesional') || t.includes('direct')) return 'profesional y directo';
+  if (t === '3' || t.includes('técnic') || t.includes('tecnic') || t.includes('precis')) return 'técnico y preciso';
+  if (t === '4' || t.includes('diviert') || t.includes('humor')) return 'divertido con humor';
+  return text.trim(); // respuesta libre
+}
+
+// ============================================
+// Construir system prompt a partir del onboarding
+// ============================================
+function buildPersonality(nombre, uso, vibe) {
+  return (
+    `Eres el asistente personal de WhatsApp de ${nombre}. ` +
+    `Tu propósito principal: ${uso}. ` +
+    `Estilo de comunicación: ${vibe}. ` +
+    `Hablas en español colombiano. ` +
+    `Eres conciso, útil y nunca empiezas con frases genéricas como "¡Claro!" o "¡Por supuesto!". ` +
+    `Vas directo al punto. Si no sabes algo, lo dices honestamente.`
+  );
+}
+
+// ============================================
+// API pública
+// ============================================
 
 /**
- * Verifica si un contacto necesita onboarding.
- * Retorna: 'new' | 'pending' | 'done'
+ * Retorna el estado del onboarding para un JID.
+ * 'new' | 'in_progress' | 'done'
  */
 async function getOnboardingState(jid) {
-  // Si está en el mapa pendiente y no expiró
-  const pending = _pendingOnboarding.get(jid);
-  if (pending) {
-    if (Date.now() - pending.timestamp < ONBOARDING_TIMEOUT_MS) {
-      return 'pending';
+  const session = _sessions.get(jid);
+  if (session) {
+    if (Date.now() - session.timestamp > TIMEOUT_MS) {
+      _sessions.delete(jid);
+      // Reiniciar si expiró
+      return 'new';
     }
-    _pendingOnboarding.delete(jid);
+    return 'in_progress';
   }
-
   const contact = await getContact(jid);
-  if (!contact || !contact.onboarding_done) return 'new';
-  return 'done';
+  if (contact?.onboarding_done) return 'done';
+  return 'new';
 }
 
 /**
- * Inicia el onboarding: envía el mensaje de bienvenida y marca como pendiente.
+ * Inicia el onboarding: envía el primer mensaje y crea la sesión.
  */
 async function startOnboarding(sock, jid, pushName) {
-  // Crear el contacto en Supabase si no existe
   await upsertContact(jid, { name: pushName || null, onboarding_done: false });
-
-  _pendingOnboarding.set(jid, { timestamp: Date.now() });
-
-  await sock.sendMessage(jid, { text: WELCOME_MESSAGE });
+  _sessions.set(jid, { step: STEPS.WELCOME, data: { pushName }, timestamp: Date.now() });
+  await sock.sendMessage(jid, { text: MSG_WELCOME(pushName) });
 }
 
 /**
- * Completa el onboarding: guarda la personalidad y limpia el estado pendiente.
- * Retorna la personalidad guardada.
+ * Procesa la respuesta del usuario según el paso actual.
+ * Retorna true si el onboarding terminó.
  */
-async function completeOnboarding(sock, jid, personalityText, groqService, pushName) {
-  const personality = personalityText.trim();
+async function handleOnboardingStep(sock, jid, userText, groqService) {
+  const session = _sessions.get(jid);
+  if (!session) return false;
 
-  // Guardar en Supabase
-  await setPersonality(jid, personality, pushName || null);
+  session.timestamp = Date.now(); // renovar timeout
+  const text = userText.trim();
 
-  // Aplicar en memoria para esta sesión
-  groqService.setCustomPrompt(jid, personality);
-  groqService.clearHistory(jid);
+  if (session.step === STEPS.WELCOME) {
+    // El usuario describió para qué quiere usar el bot
+    session.data.uso = text;
+    session.step = STEPS.NAME;
+    await sock.sendMessage(jid, { text: MSG_NAME(text) });
+    return false;
+  }
 
-  _pendingOnboarding.delete(jid);
+  if (session.step === STEPS.NAME) {
+    // El usuario dijo su nombre
+    const nombre = text.split(' ')[0]; // solo primer nombre
+    session.data.nombre = nombre;
+    session.step = STEPS.VIBE;
+    await sock.sendMessage(jid, { text: MSG_VIBE(nombre) });
+    return false;
+  }
 
-  await sock.sendMessage(jid, { text: CONFIRM_MESSAGE(personality) });
+  if (session.step === STEPS.VIBE) {
+    // El usuario eligió el vibe
+    session.data.vibe = parseVibe(text);
+    const { nombre, uso, vibe } = session.data;
 
-  return personality;
+    // Construir y guardar la personalidad
+    const personality = buildPersonality(nombre, uso, session.data.vibe);
+    await setPersonality(jid, personality, nombre);
+    groqService.setCustomPrompt(jid, personality);
+    groqService.clearHistory(jid);
+
+    _sessions.delete(jid);
+    await sock.sendMessage(jid, { text: MSG_CONFIRM(nombre, uso, session.data.vibe) });
+    return true;
+  }
+
+  return false;
 }
 
 /**
- * Carga la personalidad de un contacto desde Supabase a groqService (si no está en memoria).
+ * Carga la personalidad desde Supabase a groqService si no está en memoria.
  */
 async function loadPersonalityIfNeeded(jid, groqService) {
-  if (groqService.customPrompts.has(jid)) return; // ya está en memoria
-
+  if (groqService.customPrompts.has(jid)) return;
   const contact = await getContact(jid);
   if (contact?.personality) {
     groqService.setCustomPrompt(jid, contact.personality);
@@ -92,22 +167,21 @@ async function loadPersonalityIfNeeded(jid, groqService) {
 }
 
 /**
- * Actualiza la personalidad de un contacto (comando /miperfil).
+ * Actualiza la personalidad via /miperfil.
  */
 async function updatePersonality(sock, jid, newPersonality, groqService) {
   await setPersonality(jid, newPersonality);
   groqService.setCustomPrompt(jid, newPersonality);
   groqService.clearHistory(jid);
-
   await sock.sendMessage(jid, {
-    text: `✅ *Perfil actualizado*\n\n_${newPersonality.substring(0, 100)}${newPersonality.length > 100 ? '...' : ''}_\n\nConversación reiniciada.`
+    text: `✅ *Perfil actualizado*\n\n_${newPersonality.substring(0, 120)}${newPersonality.length > 120 ? '...' : ''}_\n\nConversación reiniciada.`
   });
 }
 
 module.exports = {
   getOnboardingState,
   startOnboarding,
-  completeOnboarding,
+  handleOnboardingStep,
   loadPersonalityIfNeeded,
   updatePersonality,
 };
