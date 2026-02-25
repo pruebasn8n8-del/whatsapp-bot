@@ -366,9 +366,11 @@ function setupRouter(sock, groqService) {
 
         // Verificar estado de onboarding
         const onboardingState = await getOnboardingState(jid);
+        console.log(`[Router] [USER] onboarding=${onboardingState} jid=${jid}`);
 
         if (onboardingState === 'new') {
           await startOnboarding(sock, jid, pushName);
+          console.log(`[Router] [USER] onboarding iniciado para jid=${jid}`);
           continue;
         }
 

@@ -374,7 +374,20 @@ main().catch((err) => {
   process.exit(1);
 });
 
-process.on('SIGINT', () => {
-  console.log('\nCerrando...');
-  process.exit(0);
-});
+function gracefulShutdown(signal) {
+  console.log(`\n${signal} recibido. Cerrando conexion WhatsApp antes de salir...`);
+  // Cerrar el WebSocket limpiamente para que WhatsApp sepa que esta sesion murio.
+  // Sin esto, WhatsApp mantiene la sesion abierta ~30s, causando error 440 en el nuevo container.
+  if (sock) {
+    try {
+      sock.ev.removeAllListeners();
+      sock.end(undefined);
+    } catch (_) {}
+    sock = null;
+  }
+  // Dar 1s para que el cierre TCP se propague, luego salir
+  setTimeout(() => process.exit(0), 1000);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
