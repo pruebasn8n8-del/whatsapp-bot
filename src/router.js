@@ -56,14 +56,18 @@ function setupRouter(sock, groqService) {
         const isGroup = jid.endsWith('@g.us');
         if (isGroup) continue; // Solo chats individuales
 
-        // Ignorar mensajes enviados POR el bot (evita que responda a sus propios mensajes)
-        if (msg.key.fromMe) continue;
-
         const body = getMessageText(msg);
         const interactive = getInteractiveResponse(msg);
 
         // Ignorar mensajes del bot (zero-width prefix)
         if (body.startsWith(PREFIX)) continue;
+
+        // fromMe: ignorar respuestas del bot a terceros.
+        // Permitir mensajes del admin a sí mismo (comandos desde su propio WhatsApp).
+        if (msg.key.fromMe) {
+          if (!isAdmin(jid)) continue; // Bot respondiendo a otros → ignorar
+          if (!body && !interactive) continue; // Audio/imagen enviado por el bot al admin → ignorar
+        }
 
         const text = body.trim();
         const textLower = text.toLowerCase();
