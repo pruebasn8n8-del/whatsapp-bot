@@ -13,6 +13,9 @@ const {
   loadPersonalityIfNeeded,
   updatePersonality,
 } = require('./onboarding');
+const {
+  isBlocked, blockContact, unblockContact, getBlockedContacts,
+} = require('./contactsDb');
 
 // Estado global (solo admin)
 let activeBot = null; // null | 'groq' | 'gastos'
@@ -21,14 +24,21 @@ const SELECTION_TIMEOUT_MS = 60 * 1000;
 
 /**
  * Retorna true si el JID es el administrador del bot.
+ * Soporta formato @s.whatsapp.net y @lid (via MY_LID env var).
  */
 function isAdmin(jid) {
   const myNumber = process.env.MY_NUMBER;
   if (!myNumber) return false;
-  // Comparar limpiando el device suffix (:X@...)
   const adminJid = myNumber + '@s.whatsapp.net';
   const cleanJid = jid.replace(/:\d+@/, '@');
-  return cleanJid === adminJid || jid === adminJid;
+  if (cleanJid === adminJid || jid === adminJid) return true;
+  // Soporte para JID tipo @lid (WhatsApp multi-device)
+  const myLid = process.env.MY_LID;
+  if (myLid) {
+    const cleanLid = myLid.replace(/:\d+@/, '@').replace('@lid', '') + '@lid';
+    if (cleanJid === cleanLid || cleanJid === myLid.replace(/:\d+@/, '@')) return true;
+  }
+  return false;
 }
 
 /**
@@ -62,6 +72,9 @@ function setupRouter(sock, groqService) {
         if (body || interactive) {
           console.log(`[Router] ${isAdmin(jid) ? '[ADMIN]' : '[USER]'} jid=${jid} texto="${(body || '').substring(0, 50)}"`);
         }
+
+        // Marcar mensaje como leído
+        try { await sock.readMessages([msg.key]); } catch (_) {}
 
         // ============================================
         // FLUJO ADMIN - Comandos privilegiados
@@ -188,24 +201,63 @@ function setupRouter(sock, groqService) {
 
           if (textLower === '/stop') {
             pendingSelection.delete(jid);
-            if (!activeBot) {
-              await sock.sendMessage(jid, { text: PREFIX + 'No hay ningun bot activo.\n\nEscribe */bot* para activar uno.' });
+            if (activeBot !== 'gastos') {
+              await sock.sendMessage(jid, { text: PREFIX + 'Groq IA es el modo por defecto.\n\n/bot - Activar Control de Gastos' });
               continue;
             }
-            const botName = activeBot === 'groq' ? 'Groq IA' : 'Control de Gastos';
             activeBot = null;
             await sock.sendMessage(jid, {
-              text: PREFIX + `*${botName}* desactivado\n\nChat en modo normal.\nEscribe */bot* para activar un bot.`
+              text: PREFIX + `*Control de Gastos* desactivado\n\nGroq IA activo por defecto.\n/bot - Volver a Gastos`
             });
-            console.log('[Router] Bot admin desactivado.');
+            console.log('[Router] Gastos desactivado, volviendo a Groq.');
             continue;
           }
 
           if (textLower === '/status') {
-            if (activeBot) {
-              await sock.sendMessage(jid, { text: PREFIX + `Bot activo: *${activeBot === 'groq' ? 'Groq IA' : 'Control de Gastos'}*\n\n/stop - Desactivar\n/bot - Cambiar bot` });
+            if (activeBot === 'gastos') {
+              await sock.sendMessage(jid, { text: PREFIX + `Bot activo: *Control de Gastos*\n\n/stop - Volver a Groq IA\n/bot - Cambiar bot` });
             } else {
-              await sock.sendMessage(jid, { text: PREFIX + 'Ningun bot activo (modo normal)\n\nEscribe */bot* para activar uno.' });
+              await sock.sendMessage(jid, { text: PREFIX + 'Groq IA activo (por defecto)\n\n/bot - Activar Control de Gastos' });
+            }
+            continue;
+          }
+
+          // /bloquear <numero> [razon]
+          const bloquearMatch = text.match(/^\/bloquear\s+\+?(\d+)(?:\s+(.+))?$/i);
+          if (bloquearMatch) {
+            const num = bloquearMatch[1];
+            const razon = bloquearMatch[2] || null;
+            const targetJid = num + '@s.whatsapp.net';
+            await blockContact(targetJid, razon);
+            await sock.sendMessage(jid, { text: PREFIX + `Número *+${num}* bloqueado.${razon ? '\nRazón: ' + razon : ''}` });
+            continue;
+          }
+
+          // /desbloquear <numero>
+          const desbloquearMatch = text.match(/^\/desbloquear\s+\+?(\d+)$/i);
+          if (desbloquearMatch) {
+            const num = desbloquearMatch[1];
+            const targetJid = num + '@s.whatsapp.net';
+            await unblockContact(targetJid);
+            await sock.sendMessage(jid, { text: PREFIX + `Número *+${num}* desbloqueado.` });
+            continue;
+          }
+
+          // /bloqueados - ver lista negra
+          if (textLower === '/bloqueados') {
+            const lista = await getBlockedContacts();
+            if (lista.length === 0) {
+              await sock.sendMessage(jid, { text: PREFIX + 'Lista negra vacía.\n\n/bloquear <numero> [razon] - Agregar número' });
+            } else {
+              const lineas = lista.map((c, i) => {
+                const num = c.jid.replace('@s.whatsapp.net', '');
+                const nombre = c.name ? ` (${c.name})` : '';
+                const razon = c.block_reason ? `  → ${c.block_reason}` : '';
+                return `${i + 1}. +${num}${nombre}${razon}`;
+              });
+              await sock.sendMessage(jid, {
+                text: PREFIX + `*Lista negra (${lista.length})*\n\n${lineas.join('\n')}\n\n/desbloquear <numero> - Quitar de la lista`
+              });
             }
             continue;
           }
@@ -255,12 +307,34 @@ function setupRouter(sock, groqService) {
             }
           }
 
-          // Delegar al bot activo del admin
-          if (activeBot === 'groq') {
-            await handleGroqMessage(msg, sock, groqService);
-          } else if (activeBot === 'gastos') {
+          // Delegar: Gastos si está activo, Groq por defecto
+          if (activeBot === 'gastos') {
             await handleGastosMessage(msg, sock);
+          } else {
+            await handleGroqMessage(msg, sock, groqService);
           }
+          continue;
+        }
+
+        // ============================================
+        // FILTRO: LISTA NEGRA Y NÚMEROS +58
+        // ============================================
+
+        const phoneNumber = jid.split('@')[0];
+        const isVenezuelan = phoneNumber.startsWith('58');
+        const blocked = await isBlocked(jid);
+
+        if (isVenezuelan || blocked) {
+          const warningMsg =
+            '🚨 *AVISO OFICIAL* 🚨\n\n' +
+            'Este número ha sido identificado, reportado y está siendo monitoreado ' +
+            'por las autoridades competentes.\n\n' +
+            'Toda comunicación queda registrada y será entregada a los organismos ' +
+            'de seguridad correspondientes.\n\n' +
+            'Le recomendamos abstenerse de continuar contactando este número.\n\n' +
+            '_Este es un aviso automatizado. No responda a este mensaje._';
+          await sock.sendMessage(jid, { text: warningMsg });
+          console.log(`[Router] [BLOQUEADO] jid=${jid} (${isVenezuelan ? '+58 Venezuela' : 'lista negra'})`);
           continue;
         }
 

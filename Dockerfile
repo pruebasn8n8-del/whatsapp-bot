@@ -22,6 +22,7 @@ COPY DailyBriefing/ ./DailyBriefing/
 # Directorios necesarios en runtime
 RUN mkdir -p auth_info Gastos/credentials .tmp_audio
 
-EXPOSE 7860
+# Railway inyecta $PORT dinamicamente; el app lee process.env.PORT
+EXPOSE ${PORT:-3000}
 
 CMD ["node", "src/index.js"]

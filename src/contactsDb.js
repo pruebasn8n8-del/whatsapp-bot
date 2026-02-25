@@ -67,4 +67,72 @@ async function createContactIfNew(jid, name = null) {
   return existing;
 }
 
-module.exports = { getContact, upsertContact, setPersonality, createContactIfNew };
+/**
+ * Persiste el paso y datos del onboarding en Supabase.
+ * Permite sobrevivir reinicios del servidor.
+ */
+async function saveOnboardingSession(jid, step, data) {
+  await upsertContact(jid, { onboarding_step: step, onboarding_data: data });
+}
+
+/**
+ * Lee el paso del onboarding desde Supabase.
+ * Retorna { step, data } o null si no hay sesión activa.
+ */
+async function getOnboardingSessionFromDB(jid) {
+  const contact = await getContact(jid);
+  if (!contact || !contact.onboarding_step) return null;
+  return { step: contact.onboarding_step, data: contact.onboarding_data || {} };
+}
+
+/**
+ * Limpia el paso del onboarding al completarlo.
+ */
+async function clearOnboardingSession(jid) {
+  await upsertContact(jid, { onboarding_step: null, onboarding_data: null, onboarding_done: true });
+}
+
+/**
+ * Verifica si un JID está bloqueado.
+ */
+async function isBlocked(jid) {
+  const contact = await getContact(jid);
+  return contact?.blocked === true;
+}
+
+/**
+ * Bloquea un contacto con razón opcional.
+ */
+async function blockContact(jid, reason = null) {
+  await upsertContact(jid, { blocked: true, block_reason: reason });
+}
+
+/**
+ * Desbloquea un contacto.
+ */
+async function unblockContact(jid) {
+  await upsertContact(jid, { blocked: false, block_reason: null });
+}
+
+/**
+ * Lista todos los contactos bloqueados.
+ */
+async function getBlockedContacts() {
+  try {
+    const { data, error } = await getSupabase()
+      .from('contacts')
+      .select('jid, name, block_reason, updated_at')
+      .eq('blocked', true);
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.error('[ContactsDB] getBlockedContacts error:', err.message);
+    return [];
+  }
+}
+
+module.exports = {
+  getContact, upsertContact, setPersonality, createContactIfNew,
+  saveOnboardingSession, getOnboardingSessionFromDB, clearOnboardingSession,
+  isBlocked, blockContact, unblockContact, getBlockedContacts,
+};
