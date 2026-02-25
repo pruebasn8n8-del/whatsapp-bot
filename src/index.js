@@ -58,6 +58,30 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
 // ============================================
+// Test de red - verifica que podamos llegar a WhatsApp
+// ============================================
+async function testNetworkConnectivity() {
+  return new Promise((resolve) => {
+    const net = require('net');
+    const socket = net.createConnection({ host: 'web.whatsapp.com', port: 443, timeout: 10000 });
+    socket.on('connect', () => {
+      console.log('[Network] OK - Conexion TCP a web.whatsapp.com:443 exitosa');
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on('error', (err) => {
+      console.error('[Network] ERROR - No se puede conectar a web.whatsapp.com:443:', err.message);
+      resolve(false);
+    });
+    socket.on('timeout', () => {
+      console.error('[Network] TIMEOUT - web.whatsapp.com:443 no responde');
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
+// ============================================
 // Conectar WhatsApp con Baileys
 // ============================================
 async function connectWhatsApp() {
@@ -71,8 +95,16 @@ async function connectWhatsApp() {
     ({ state, saveCreds } = await useMultiFileAuthState('auth_info'));
   }
 
-  const { version } = await fetchLatestBaileysVersion();
-  console.log('Baileys version:', version.join('.'));
+  // Intentar obtener version actual, fallback a version estable conocida
+  let version;
+  try {
+    const result = await fetchLatestBaileysVersion();
+    version = result.version;
+    console.log('Baileys version (remota):', version.join('.'));
+  } catch (err) {
+    version = [2, 3000, 1015901306];
+    console.log('Baileys version (fallback hardcoded):', version.join('.'));
+  }
 
   sock = makeWASocket({
     version,
@@ -253,6 +285,9 @@ async function main() {
   console.log('Iniciando sistema unificado de WhatsApp (Baileys)...\n');
   console.log('Auth mode:', USE_SUPABASE_AUTH ? 'Supabase' : 'Archivo local');
   console.log('Pairing code:', USE_PAIRING_CODE ? 'Si' : 'No (QR)');
+
+  // Verificar conectividad de red hacia WhatsApp
+  await testNetworkConnectivity();
 
   try {
     await getDoc();
