@@ -62,11 +62,16 @@ function setupRouter(sock, groqService) {
         // Ignorar mensajes del bot (zero-width prefix)
         if (body.startsWith(PREFIX)) continue;
 
-        // fromMe=true significa que el mensaje lo envió ESTA cuenta (el admin desde su teléfono).
-        // Solo procesamos si tiene texto y no es una respuesta del propio bot (PREFIX).
-        // Cualquier fromMe con texto = comando del admin, independiente del formato @lid del JID.
-        const isSelfCommand = msg.key.fromMe && !!body && !body.startsWith(PREFIX);
-        if (msg.key.fromMe && !isSelfCommand) continue; // Bot enviando sin texto → ignorar
+        // fromMe=true puede ser:
+        // 1. Bot enviando mensaje a usuario externo (ej: onboarding, warning) → IGNORAR
+        // 2. Admin escribiéndose a sí mismo (self-chat) → procesar como comando
+        // Distinguimos por número: si el remoteJid es el propio número del bot = self-chat.
+        if (msg.key.fromMe) {
+          const botNumber = (sock.user?.id || '').split(':')[0].split('@')[0];
+          const jidNumber = jid.split(':')[0].split('@')[0];
+          if (jidNumber !== botNumber) continue; // Bot enviando a usuario externo → ignorar
+          if (!body) continue; // Self-chat sin texto → ignorar
+        }
 
         const text = body.trim();
         const textLower = text.toLowerCase();
@@ -82,7 +87,7 @@ function setupRouter(sock, groqService) {
         // ============================================
         // FLUJO ADMIN - Comandos privilegiados
         // ============================================
-        if (isAdmin(jid) || isSelfCommand) {
+        if (isAdmin(jid) || msg.key.fromMe) {
           // Ignorar mensajes propios que no sean comandos si no hay bot activo
           // (el admin puede usar el bot normalmente si activa groq)
 
@@ -225,24 +230,28 @@ function setupRouter(sock, groqService) {
             continue;
           }
 
-          // /bloquear <numero> [razon]
-          const bloquearMatch = text.match(/^\/bloquear\s+\+?(\d+)(?:\s+(.+))?$/i);
+          // /bloquear <numero_o_jid> [razon]
+          // Acepta: /bloquear 573108857927  o  /bloquear 150714848379046@lid
+          const bloquearMatch = text.match(/^\/bloquear\s+\+?(\S+)(?:\s+(.+))?$/i);
           if (bloquearMatch) {
-            const num = bloquearMatch[1];
+            const raw = bloquearMatch[1];
             const razon = bloquearMatch[2] || null;
-            const targetJid = num + '@s.whatsapp.net';
+            // Si ya trae @ es un JID completo (ej: @lid); si no, es número de teléfono
+            const targetJid = raw.includes('@') ? raw : raw + '@s.whatsapp.net';
+            const display = raw.includes('@') ? raw : `+${raw}`;
             await blockContact(targetJid, razon);
-            await sock.sendMessage(jid, { text: PREFIX + `Número *+${num}* bloqueado.${razon ? '\nRazón: ' + razon : ''}` });
+            await sock.sendMessage(jid, { text: PREFIX + `*${display}* bloqueado.${razon ? '\nRazón: ' + razon : ''}` });
             continue;
           }
 
-          // /desbloquear <numero>
-          const desbloquearMatch = text.match(/^\/desbloquear\s+\+?(\d+)$/i);
+          // /desbloquear <numero_o_jid>
+          const desbloquearMatch = text.match(/^\/desbloquear\s+\+?(\S+)$/i);
           if (desbloquearMatch) {
-            const num = desbloquearMatch[1];
-            const targetJid = num + '@s.whatsapp.net';
+            const raw = desbloquearMatch[1];
+            const targetJid = raw.includes('@') ? raw : raw + '@s.whatsapp.net';
+            const display = raw.includes('@') ? raw : `+${raw}`;
             await unblockContact(targetJid);
-            await sock.sendMessage(jid, { text: PREFIX + `Número *+${num}* desbloqueado.` });
+            await sock.sendMessage(jid, { text: PREFIX + `*${display}* desbloqueado.` });
             continue;
           }
 
@@ -323,8 +332,11 @@ function setupRouter(sock, groqService) {
         // FILTRO: LISTA NEGRA Y NÚMEROS +58
         // ============================================
 
-        const phoneNumber = jid.split('@')[0];
-        const isVenezuelan = phoneNumber.startsWith('58');
+        // phoneNumber: para JIDs @s.whatsapp.net es el número real; para @lid es opaco
+        const phoneNumber = jid.split(':')[0].split('@')[0];
+        // +58 solo aplica si el JID es @s.whatsapp.net (número real conocido)
+        const isVenezuelan = jid.endsWith('@s.whatsapp.net') && phoneNumber.startsWith('58');
+        // Revisar lista negra tanto por JID real (@s.whatsapp.net) como por @lid
         const blocked = await isBlocked(jid);
 
         if (isVenezuelan || blocked) {
