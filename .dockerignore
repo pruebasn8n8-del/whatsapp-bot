@@ -1,0 +1,16 @@
+node_modules
+Groqbot/node_modules
+Gastos/node_modules
+auth_info
+.env
+*.log
+app.log
+.tmp_audio
+Groqbot/Dockerfile
+Groqbot/README.md
+Groqbot/package.json
+Groqbot/package-lock.json
+Gastos/package.json
+Gastos/package-lock.json
+Gastos/credentials
+Gastos/node_modules

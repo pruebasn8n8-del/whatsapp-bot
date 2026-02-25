@@ -1,0 +1,26 @@
+# Credenciales y secrets - NUNCA subir
+.env
+Gastos/credentials/
+auth_info/
+
+# Dependencias
+node_modules/
+Groqbot/node_modules/
+Gastos/node_modules/
+
+# Logs y temporales
+*.log
+app.log
+.tmp_audio/
+learned-categories.json
+
+# Sesion antigua whatsapp-web.js
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Claude Code
+.claude/
+
+# Sistema
+.DS_Store
+Thumbs.db
