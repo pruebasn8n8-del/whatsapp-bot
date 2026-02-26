@@ -473,9 +473,10 @@ Responde con JSON (incluye razonamiento):
  * Incluye razonamiento para verificar la corrección.
  */
 async function _parseFieldCorrection(text, data, groqService) {
-  return _groqParse(
+  const existingAccounts = Array.isArray(data.accounts) ? data.accounts : [];
+  const result = await _groqParse(
     `El usuario corrige un dato de su perfil financiero.
-Datos actuales: ${JSON.stringify({ salary: data.salary, savings_goal: data.savings_goal, payday: data.payday, accounts: data.accounts })}
+Cuentas actuales: ${JSON.stringify(existingAccounts)}
 ${NUM_RULES}
 
 PROCESO:
@@ -485,10 +486,15 @@ PROCESO:
 4. Verifica que el nuevo valor tiene sentido
 5. Si no está claro → field: null
 
-Ejemplos con razonamiento:
-- "la meta es 100k" → savings_goal: 100k → sufijo k → 100.000
-- "tengo 7.156 en Nequi" → accounts: punto=separador → balance: 7156
-- "gano 3M" → salary: sufijo M → 3.000.000
+IMPORTANTE para "accounts":
+- Si el usuario solo menciona UNA cuenta, solo cambia esa. Las demás se conservan.
+- El valor SIEMPRE debe ser un array: [{"name":"Nequi","balance":7156}]
+- Si dice "tengo 7.156 en Nequi" → actualiza solo Nequi a 7156, conserva efectivo.
+
+Ejemplos:
+- "la meta es 100k" → field:"savings_goal", value:100000
+- "tengo 7.156 en Nequi" → field:"accounts", value:[{"name":"Nequi","balance":7156}]
+- "gano 3M" → field:"salary", value:3000000
 
 Responde con JSON:
 {
@@ -499,6 +505,20 @@ Responde con JSON:
 Sin campo claro → {"field": null, "value": null}`,
     text, groqService
   );
+
+  // Normalizar accounts: siempre array + merge con cuentas existentes
+  if (result.field === 'accounts') {
+    const corrected = Array.isArray(result.value) ? result.value : (result.value ? [result.value] : []);
+    const merged = [...existingAccounts];
+    for (const acc of corrected) {
+      const idx = merged.findIndex(a => a.name?.toLowerCase() === acc.name?.toLowerCase());
+      if (idx >= 0) merged[idx] = acc;
+      else merged.push(acc);
+    }
+    result.value = merged;
+  }
+
+  return result;
 }
 
 module.exports = { startGastosOnboarding, handleGastosOnboardingStep, resendCurrentStep };
