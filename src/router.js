@@ -3,8 +3,8 @@
 
 const { handleGroqMessage } = require('../Groqbot/src/whatsappClient');
 const { handleGastosMessage } = require('../Gastos/src/whatsapp/messageHandler');
-const { sendBriefingNow, setScheduleTime, setEnabled, isEnabled, getScheduleTime } = require('../DailyBriefing/src/scheduler');
-const { getLastNews } = require('../DailyBriefing/src/newsService');
+const { sendBriefingNow, setScheduleTime, setEnabled, isEnabled, getScheduleTime, getScheduledTimes } = require('../DailyBriefing/src/scheduler');
+const { getLastNews, getNewsByTopics, formatNews } = require('../DailyBriefing/src/newsService');
 const { getMessageText, getInteractiveResponse, sendButtonMessage, PREFIX } = require('./messageUtils');
 const {
   getOnboardingState,
@@ -16,11 +16,24 @@ const {
 const {
   isBlocked, blockContact, unblockContact, getBlockedContacts,
 } = require('./contactsDb');
+const { getPrefs, setPrefs, formatPrefsText, VALID_TOPICS, VALID_FX } = require('./prefsDb');
+const { getTRM, getCryptoPrice, getFxRates, formatCOP: _formatCOP, formatUSD: _formatUSD, formatChangeArrow: _formatArrow, COIN_ALIASES } = require('../Groqbot/src/priceService');
+const { CRYPTO_EMOJI, FX_EMOJI, FX_NAME } = require('../DailyBriefing/src/briefingService');
+const { getGastosData, setGastosData, resetAllGastosData, resetGastosData } = require('./gastosDb');
+const { startGastosOnboarding, handleGastosOnboardingStep, resendCurrentStep } = require('../Gastos/src/gastosOnboarding');
+const { setCurrentSpreadsheetId } = require('../Gastos/src/sheets/sheetsClient');
 
-// Estado global (solo admin)
-let activeBot = null; // null | 'groq' | 'gastos'
+// Palabras clave que activan el bot de Gastos (para todos los usuarios)
+const GASTOS_TRIGGERS = ['/gastos', '/ahorros', '/finanzas', '/presupuesto', '/cuentas', '/dinero', '/plata'];
+
+// Estado global admin
+let activeBot = null; // null | 'groq' | 'gastos' | 'gastos_onboarding'
 const pendingSelection = new Map(); // chatId -> timestamp
 const SELECTION_TIMEOUT_MS = 60 * 1000;
+
+// Estado por usuario externo (no persiste en reinicios, pero es ok)
+// 'gastos' | 'gastos_onboarding' | null (null = Groq por defecto)
+const userActiveBot = new Map();
 
 /**
  * Retorna true si el JID es el administrador del bot.
@@ -87,66 +100,237 @@ function setupRouter(sock, groqService) {
         try { await sock.readMessages([msg.key]); } catch (_) {}
 
         // ============================================
+        // COMANDOS UNIVERSALES (admin y usuarios)
+        // ============================================
+
+        // /noticias - obtener noticias ahora (con preferencias del usuario)
+        if (textLower === '/noticias') {
+          try {
+            await sock.sendPresenceUpdate('composing', jid);
+            const prefs = await getPrefs(jid);
+            const topics = prefs.news_topics && prefs.news_topics.length ? prefs.news_topics : ['colombia', 'internacional'];
+            const count = prefs.news_count || 5;
+            const news = await getNewsByTopics(topics, count);
+            const newsText = formatNews(news) || 'No se pudieron obtener noticias en este momento.';
+            await sock.sendMessage(jid, { text: PREFIX + newsText });
+          } catch (err) {
+            await sock.sendMessage(jid, { text: PREFIX + 'Error obteniendo noticias: ' + err.message.substring(0, 80) });
+          }
+          continue;
+        }
+
+        // /precios - precios actuales (con preferencias del usuario)
+        if (textLower === '/precios') {
+          try {
+            await sock.sendPresenceUpdate('composing', jid);
+            const prefs = await getPrefs(jid);
+            const cryptos = prefs.cryptos && prefs.cryptos.length ? prefs.cryptos : ['BTC'];
+            const fx = prefs.fx_currencies || [];
+            const showTrm = prefs.show_trm !== false;
+
+            const lines = ['💰 *Precios actuales*', ''];
+
+            if (showTrm) {
+              try {
+                const trm = await getTRM();
+                if (trm) lines.push(`💵 *Dólar TRM:* ${_formatCOP(trm.rate)} COP`);
+              } catch (_) {}
+            }
+
+            const cryptoResults = await Promise.allSettled(cryptos.map(c => getCryptoPrice(c)));
+            for (let i = 0; i < cryptos.length; i++) {
+              if (cryptoResults[i].status === 'fulfilled' && cryptoResults[i].value) {
+                const b = cryptoResults[i].value;
+                const emoji = CRYPTO_EMOJI[b.symbol] || '🪙';
+                lines.push(`${emoji} *${b.symbol}:* ${_formatUSD(b.price_usd)} (${_formatArrow(b.change_24h)})`);
+              }
+            }
+
+            if (fx.length > 0) {
+              const rates = await getFxRates(fx).catch(() => []);
+              if (rates.length > 0) {
+                lines.push('');
+                lines.push('💱 *Divisas*');
+                for (const r of rates) {
+                  const emoji = FX_EMOJI[r.currency] || '';
+                  const name = FX_NAME[r.currency] || r.currency;
+                  lines.push(`${emoji} *${name}:* ${_formatCOP(r.priceCop)} COP`);
+                }
+              }
+            }
+
+            await sock.sendMessage(jid, { text: PREFIX + lines.join('\n') });
+          } catch (err) {
+            await sock.sendMessage(jid, { text: PREFIX + 'Error obteniendo precios: ' + err.message.substring(0, 80) });
+          }
+          continue;
+        }
+
+        // /prefs [subcomando] - ver/editar preferencias del briefing
+        if (textLower === '/prefs' || textLower.startsWith('/prefs ')) {
+          const args = text.replace(/^\/prefs\s*/i, '').trim();
+          const argsLower = args.toLowerCase();
+
+          try {
+            const prefs = await getPrefs(jid);
+
+            if (!args) {
+              await sock.sendMessage(jid, { text: PREFIX + formatPrefsText(prefs) });
+              continue;
+            }
+
+            if (argsLower === 'on') {
+              await setPrefs(jid, { briefing_enabled: true });
+              const times = prefs.briefing_times && prefs.briefing_times.length
+                ? prefs.briefing_times.map(h => `${h}:00`).join(', ')
+                : '7:00, 13:00, 19:00';
+              await sock.sendMessage(jid, { text: PREFIX + `✅ Briefing automático *activado*\nRecibirás actualizaciones a las *${times}*\n\n_/prefs off para desactivar_` });
+              continue;
+            }
+
+            if (argsLower === 'off') {
+              await setPrefs(jid, { briefing_enabled: false });
+              await sock.sendMessage(jid, { text: PREFIX + '❌ Briefing automático *desactivado*\n\n_/prefs on para activar_' });
+              continue;
+            }
+
+            if (argsLower.startsWith('horarios ')) {
+              const rawHours = argsLower.replace('horarios ', '').split(/\s+/).map(Number).filter(h => !isNaN(h) && h >= 0 && h <= 23);
+              const scheduledTimes = getScheduledTimes ? getScheduledTimes() : [7, 13, 19];
+              const validHours = rawHours.filter(h => scheduledTimes.includes(h));
+              if (validHours.length === 0) {
+                await sock.sendMessage(jid, { text: PREFIX + `Horarios disponibles: *7* (7:00 AM), *13* (1:00 PM), *19* (7:00 PM)\nEjemplo: _/prefs horarios 7 19_` });
+              } else {
+                await setPrefs(jid, { briefing_times: validHours });
+                await sock.sendMessage(jid, { text: PREFIX + `⏰ Horarios actualizados: *${validHours.map(h => h + ':00').join(', ')}*` });
+              }
+              continue;
+            }
+
+            if (argsLower.startsWith('monedas ')) {
+              const rawCryptos = argsLower.replace('monedas ', '').split(/\s+/).map(c => c.toUpperCase());
+              const validCryptos = rawCryptos.filter(c => COIN_ALIASES[c.toLowerCase()]).map(c => c.toUpperCase());
+              if (validCryptos.length === 0) {
+                await sock.sendMessage(jid, { text: PREFIX + 'Disponibles: BTC ETH SOL BNB XRP ADA DOGE MATIC AVAX LINK ATOM LTC NEAR TON SHIB\nEjemplo: _/prefs monedas BTC ETH_' });
+              } else {
+                await setPrefs(jid, { cryptos: validCryptos });
+                await sock.sendMessage(jid, { text: PREFIX + `₿ Criptomonedas: *${validCryptos.join(', ')}*` });
+              }
+              continue;
+            }
+
+            if (argsLower.startsWith('divisas ')) {
+              const rawFx = argsLower.replace('divisas ', '').split(/\s+/).map(c => c.toUpperCase());
+              if (rawFx.includes('NINGUNA') || rawFx.includes('NO') || rawFx.includes('NADA')) {
+                await setPrefs(jid, { fx_currencies: [] });
+                await sock.sendMessage(jid, { text: PREFIX + '💱 Divisas extra desactivadas.' });
+              } else {
+                const validFx = rawFx.filter(c => VALID_FX.includes(c));
+                if (validFx.length === 0) {
+                  await sock.sendMessage(jid, { text: PREFIX + `Disponibles: ${VALID_FX.join(', ')}\nEjemplo: _/prefs divisas EUR GBP_` });
+                } else {
+                  await setPrefs(jid, { fx_currencies: validFx });
+                  await sock.sendMessage(jid, { text: PREFIX + `💱 Divisas extra: *${validFx.join(', ')}*` });
+                }
+              }
+              continue;
+            }
+
+            if (argsLower.startsWith('noticias ')) {
+              const rawTopics = argsLower.replace('noticias ', '').split(/\s+/);
+              const validTopics = rawTopics.filter(t => VALID_TOPICS.includes(t));
+              if (validTopics.length === 0) {
+                await sock.sendMessage(jid, { text: PREFIX + `Temas disponibles: *${VALID_TOPICS.join(', ')}*\nEjemplo: _/prefs noticias colombia tecnologia_` });
+              } else {
+                await setPrefs(jid, { news_topics: validTopics });
+                await sock.sendMessage(jid, { text: PREFIX + `📰 Temas de noticias: *${validTopics.join(', ')}*` });
+              }
+              continue;
+            }
+
+            if (argsLower.startsWith('cantidad ')) {
+              const n = parseInt(argsLower.replace('cantidad ', ''));
+              if (isNaN(n) || n < 1 || n > 10) {
+                await sock.sendMessage(jid, { text: PREFIX + 'Cantidad válida: 1 a 10\nEjemplo: _/prefs cantidad 5_' });
+              } else {
+                await setPrefs(jid, { news_count: n });
+                await sock.sendMessage(jid, { text: PREFIX + `📰 Cantidad de noticias: *${n}*` });
+              }
+              continue;
+            }
+
+            if (argsLower.startsWith('clima ')) {
+              const val = argsLower.includes('on') || argsLower.includes('si') || argsLower.includes('sí');
+              await setPrefs(jid, { show_weather: val });
+              await sock.sendMessage(jid, { text: PREFIX + `🌤️ Clima en el briefing: ${val ? '*activado*' : '*desactivado*'}` });
+              continue;
+            }
+
+            if (argsLower.startsWith('dolar ') || argsLower.startsWith('dólar ') || argsLower.startsWith('trm ')) {
+              const val = argsLower.includes('on') || argsLower.includes('si') || argsLower.includes('sí');
+              await setPrefs(jid, { show_trm: val });
+              await sock.sendMessage(jid, { text: PREFIX + `💵 Dólar TRM en el briefing: ${val ? '*activado*' : '*desactivado*'}` });
+              continue;
+            }
+
+            // Subcomando no reconocido → mostrar prefs
+            await sock.sendMessage(jid, { text: PREFIX + formatPrefsText(prefs) });
+          } catch (err) {
+            await sock.sendMessage(jid, { text: PREFIX + 'Error actualizando preferencias: ' + err.message.substring(0, 80) });
+          }
+          continue;
+        }
+
+        // /briefing (sin argumentos) - briefing completo ahora con las prefs del usuario
+        if (textLower === '/briefing') {
+          try {
+            await sock.sendPresenceUpdate('composing', jid);
+            await sendBriefingNow(sock, jid);
+          } catch (err) {
+            await sock.sendMessage(jid, { text: PREFIX + 'Error generando briefing: ' + err.message.substring(0, 100) });
+          }
+          continue;
+        }
+
+        // ============================================
         // FLUJO ADMIN - Comandos privilegiados
         // ============================================
         if (isAdmin(jid) || msg.key.fromMe) {
           // Ignorar mensajes propios que no sean comandos si no hay bot activo
           // (el admin puede usar el bot normalmente si activa groq)
 
-          if (textLower === '/briefing') {
-            try {
-              await sock.sendPresenceUpdate('composing', jid);
-              await sendBriefingNow(sock, jid);
-            } catch (err) {
-              await sock.sendMessage(jid, { text: PREFIX + 'Error generando briefing: ' + err.message.substring(0, 100) });
-            }
-            continue;
-          }
-
-          const briefingHoraMatch = text.match(/^\/briefing\s+hora\s+(\d{1,2}):?(\d{2})?$/i);
-          if (briefingHoraMatch) {
-            const hour = parseInt(briefingHoraMatch[1]);
-            const minute = parseInt(briefingHoraMatch[2] || '0');
-            if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-              await sock.sendMessage(jid, { text: PREFIX + 'Hora invalida. Usa formato 24h: /briefing hora 7:00' });
-              continue;
-            }
-            setScheduleTime(hour, minute, sock);
-            await sock.sendMessage(jid, {
-              text: PREFIX + `⏰ Briefing programado a las *${hour}:${String(minute).padStart(2, '0')}*\n_Zona: ${process.env.TIMEZONE || 'America/Bogota'}_`
-            });
-            continue;
-          }
-
           if (textLower === '/briefing off') {
             setEnabled(false, sock);
-            await sock.sendMessage(jid, { text: PREFIX + 'Daily briefing *desactivado*.\nReactivar: /briefing on' });
+            await sock.sendMessage(jid, { text: PREFIX + '⏹️ Briefing automático *desactivado* globalmente.\nReactivar: /briefing on' });
             continue;
           }
 
           if (textLower === '/briefing on') {
             setEnabled(true, sock);
-            const { hour, minute } = getScheduleTime();
+            const times = (getScheduledTimes ? getScheduledTimes() : [7, 13, 19]).map(h => h + ':00').join(', ');
             await sock.sendMessage(jid, {
-              text: PREFIX + `Daily briefing *activado* ⏰\nHora: *${hour}:${String(minute).padStart(2, '0')}*\n_Zona: ${process.env.TIMEZONE || 'America/Bogota'}_`
+              text: PREFIX + `✅ Briefing automático *activado*\nHorarios: *${times}*\n_Zona: ${process.env.TIMEZONE || 'America/Bogota'}_`
             });
             continue;
           }
 
           if (textLower === '/briefing status') {
             const enabled = isEnabled();
-            const { hour, minute } = getScheduleTime();
+            const times = (getScheduledTimes ? getScheduledTimes() : [7, 13, 19]).map(h => h + ':00').join(', ');
             await sock.sendMessage(jid, {
               text: PREFIX + [
-                '*Daily Briefing*',
-                `Estado: ${enabled ? '*activo* ✅' : '*desactivado* ❌'}`,
-                `Hora: *${hour}:${String(minute).padStart(2, '0')}*`,
+                '*Daily Briefing (Admin)*',
+                `Estado global: ${enabled ? '*activo* ✅' : '*desactivado* ❌'}`,
+                `Horarios: *${times}*`,
                 `Zona: _${process.env.TIMEZONE || 'America/Bogota'}_`,
                 '',
-                'Comandos:',
-                '  /briefing - Obtener ahora',
-                '  /briefing hora 7:00 - Cambiar hora',
-                '  /briefing on/off - Activar/desactivar',
+                'Comandos admin:',
+                '  /briefing on/off - Activar/desactivar global',
+                '  /briefing status - Estado',
+                '',
+                'Comandos personales:',
+                '  /briefing - Obtener briefing ahora',
+                '  /prefs - Ver/editar mis preferencias',
               ].join('\n')
             });
             continue;
@@ -211,7 +395,7 @@ function setupRouter(sock, groqService) {
 
           if (textLower === '/stop') {
             pendingSelection.delete(jid);
-            if (activeBot !== 'gastos') {
+            if (activeBot !== 'gastos' && activeBot !== 'gastos_onboarding') {
               await sock.sendMessage(jid, { text: PREFIX + 'Groq IA es el modo por defecto.\n\n/bot - Activar Control de Gastos' });
               continue;
             }
@@ -288,9 +472,9 @@ function setupRouter(sock, groqService) {
             }
             if (selection) {
               pendingSelection.delete(jid);
-              activeBot = selection;
               const divider = '─'.repeat(25);
               if (selection === 'groq') {
+                activeBot = 'groq';
                 await sock.sendMessage(jid, {
                   text: PREFIX +
                     '*Groq IA activado*\n' + divider + '\n\n' +
@@ -305,25 +489,91 @@ function setupRouter(sock, groqService) {
                     divider + '\n_Escribe /stop para desactivar_'
                 });
               } else {
-                await sock.sendMessage(jid, {
-                  text: PREFIX +
-                    '*Control de Gastos activado*\n' + divider + '\n\n' +
-                    'Registra un gasto escribiendo:\n_Almuerzo 25k_\n\n' +
-                    '*Comandos principales:*\n' +
-                    '  ver gastos  -  Ver ultimos gastos\n' +
-                    '  resumen  -  Resumen financiero\n' +
-                    '  config  -  Ver configuracion\n' +
-                    '  salario 5M  -  Configurar salario\n\n' +
-                    divider + '\n_Escribe /stop para desactivar_'
-                });
+                // Gastos: verificar si el admin ya tiene su sheet personal
+                const gastosData = await getGastosData(jid);
+                if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
+                  activeBot = 'gastos';
+                  await sock.sendMessage(jid, {
+                    text: PREFIX +
+                      '*Control de Gastos activado*\n' + divider + '\n\n' +
+                      'Registra un gasto escribiendo:\n_Almuerzo 25k_\n\n' +
+                      '*Comandos principales:*\n' +
+                      '  ver gastos  -  Ver ultimos gastos\n' +
+                      '  ver gastos [enero]  -  Ver otro mes\n' +
+                      '  resumen  -  Resumen financiero\n' +
+                      '  config  -  Ver configuracion\n' +
+                      '  salario 5M  -  Configurar salario\n\n' +
+                      `📊 Tu hoja: ${gastosData.sheet_url}\n\n` +
+                      divider + '\n_Escribe /stop para desactivar_'
+                  });
+                } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
+                  activeBot = 'gastos_onboarding';
+                  await resendCurrentStep(sock, jid);
+                } else {
+                  activeBot = 'gastos_onboarding';
+                  await startGastosOnboarding(sock, jid);
+                }
               }
               continue;
             }
           }
 
-          // Delegar: Gastos si está activo, Groq por defecto
-          if (activeBot === 'gastos') {
-            await handleGastosMessage(msg, sock);
+          // /resetgastos - Reset datos de gastos (admin)
+          if (textLower === '/resetgastos' || textLower === '/resetgastos all') {
+            const resetAll = textLower === '/resetgastos all';
+            await sock.sendMessage(jid, { text: PREFIX + `⏳ Reseteando datos de gastos${resetAll ? ' de todos los usuarios' : ''}...` });
+            let ok;
+            if (resetAll) {
+              ok = await resetAllGastosData();
+            } else {
+              await resetGastosData(jid);
+              ok = true;
+            }
+            activeBot = null;
+            if (ok) {
+              await sock.sendMessage(jid, {
+                text: PREFIX + [
+                  `✅ *Gastos reseteados${resetAll ? ' (todos los usuarios)' : ''}*`,
+                  '',
+                  resetAll
+                    ? 'Todos los usuarios deberán pasar por el onboarding nuevamente para crear su hoja de cálculo propia.'
+                    : 'Tu perfil de gastos fue reseteado. Usa /gastos para configurar de nuevo.',
+                  '',
+                  '_Groq IA activo por defecto._',
+                ].join('\n')
+              });
+            } else {
+              await sock.sendMessage(jid, { text: PREFIX + 'Error al resetear. Revisa los logs.' });
+            }
+            continue;
+          }
+
+          // Trigger words de gastos para el admin - usa sheet propio (igual que usuarios externos)
+          if (GASTOS_TRIGGERS.includes(textLower)) {
+            const gastosData = await getGastosData(jid);
+            if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
+              activeBot = 'gastos';
+              const divider = '─'.repeat(25);
+              await sock.sendMessage(jid, {
+                text: PREFIX + `💰 *Control de Gastos activado*\n${divider}\n\nRegistra un gasto:\n_Almuerzo 25k_ | _Uber 15.000_ | _Netflix 20k_\n\n*Comandos:*\n  ver gastos  -  Ver últimos gastos\n  ver gastos [enero]  -  Ver otro mes\n  resumen  -  Análisis financiero\n  cuentas  -  Ver saldo de cuentas\n  config  -  Configuración\n\n📊 Tu hoja: ${gastosData.sheet_url}\n\n${divider}\n_Escribe /stop para desactivar_`
+              });
+            } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
+              activeBot = 'gastos_onboarding';
+              await resendCurrentStep(sock, jid);
+            } else {
+              activeBot = 'gastos_onboarding';
+              await startGastosOnboarding(sock, jid);
+            }
+            continue;
+          }
+
+          // Delegar: Gastos (con sheet propio), Onboarding, o Groq por defecto
+          if (activeBot === 'gastos_onboarding') {
+            const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
+            if (done) activeBot = 'gastos';
+          } else if (activeBot === 'gastos') {
+            const gastosData = await getGastosData(jid);
+            await handleGastosMessage(msg, sock, gastosData.sheet_id || null);
           } else {
             await handleGroqMessage(msg, sock, groqService);
           }
@@ -359,6 +609,44 @@ function setupRouter(sock, groqService) {
         // FLUJO USUARIOS EXTERNOS - Groq IA multi-usuario
         // ============================================
 
+        // /noticia <num> también disponible para usuarios externos (usando la misma caché)
+        const noticiaExtMatch = text.match(/^\/noticia\s+(\d+)$/i);
+        if (noticiaExtMatch) {
+          const num = parseInt(noticiaExtMatch[1]);
+          const news = getLastNews();
+          if (news.length === 0) {
+            await sock.sendMessage(jid, { text: PREFIX + 'No hay noticias cargadas. Escribe /noticias primero.' });
+            continue;
+          }
+          if (num < 1 || num > news.length) {
+            await sock.sendMessage(jid, { text: PREFIX + `Número inválido. Hay ${news.length} noticias (1-${news.length}).` });
+            continue;
+          }
+          await sock.sendPresenceUpdate('composing', jid);
+          const n = news[num - 1];
+          let articleUrl = '';
+          let summary = '';
+          try {
+            const { searchResult, content } = await _findAndFetchArticle(n.title, n.source);
+            articleUrl = searchResult?.url || '';
+            if (content) summary = await _summarizeWithAI(groqService, n.title, content);
+          } catch (e) {
+            console.log('[Router] Error buscando artículo:', e.message);
+          }
+          const divider = '─'.repeat(25);
+          const lines = [`📰 *${n.title}*`, divider];
+          if (n.source) lines.push(`📌 _${n.source}_`);
+          if (summary) lines.push('', summary);
+          if (articleUrl) lines.push('', `🔗 ${articleUrl}`);
+          lines.push('', divider);
+          const nav = [];
+          if (num > 1) nav.push(`/noticia ${num - 1} ← ant`);
+          if (num < news.length) nav.push(`/noticia ${num + 1} → sig`);
+          if (nav.length > 0) lines.push(nav.join('  |  '));
+          await sock.sendMessage(jid, { text: PREFIX + lines.join('\n') });
+          continue;
+        }
+
         // Comando /miperfil - cambiar personalidad (disponible para todos)
         const miperfilMatch = text.match(/^\/miperfil\s+(.+)$/is);
         if (miperfilMatch) {
@@ -381,6 +669,82 @@ function setupRouter(sock, groqService) {
           continue;
         }
 
+        // ============================================
+        // MODO GASTOS (usuarios externos)
+        // ============================================
+        const userBot = userActiveBot.get(jid);
+
+        // Salir de gastos
+        if (userBot && (textLower === '/salir' || textLower === '/stop')) {
+          userActiveBot.delete(jid);
+          await sock.sendMessage(jid, { text: PREFIX + '👋 Volviste al asistente de IA. Escríbeme cuando necesites algo!' });
+          continue;
+        }
+
+        // Trigger words para activar gastos
+        if (!userBot && GASTOS_TRIGGERS.includes(textLower)) {
+          const gastosData = await getGastosData(jid);
+
+          if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
+            // Onboarding completo → activar modo gastos
+            userActiveBot.set(jid, 'gastos');
+            const divider = '─'.repeat(25);
+            await sock.sendMessage(jid, {
+              text: PREFIX + [
+                '💰 *Modo Finanzas activado*',
+                divider,
+                '',
+                'Registra un gasto escribiendo lo que gastaste:',
+                '_"Almuerzo 25k"_ | _"Transporte 15.000"_ | _"Netflix 20k"_',
+                '',
+                '*Comandos útiles:*',
+                '  _ver gastos_ → últimos registros',
+                '  _resumen_ → análisis financiero',
+                '  _cuentas_ → estado de cuentas',
+                '  _meta ahorro 300k_ → cambiar meta',
+                '',
+                `📊 Tu hoja: ${gastosData.sheet_url || '(ver en config)'}`,
+                divider,
+                '_/salir → volver al asistente de IA_',
+              ].join('\n'),
+            });
+          } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
+            // Onboarding en progreso → retomar
+            userActiveBot.set(jid, 'gastos_onboarding');
+            await resendCurrentStep(sock, jid);
+          } else {
+            // Nuevo → iniciar onboarding
+            userActiveBot.set(jid, 'gastos_onboarding');
+            await startGastosOnboarding(sock, jid);
+          }
+          continue;
+        }
+
+        // Estamos en onboarding de gastos
+        if (userBot === 'gastos_onboarding') {
+          const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
+          if (done) {
+            userActiveBot.set(jid, 'gastos'); // Completado → cambiar a modo gastos
+          }
+          continue;
+        }
+
+        // Estamos en modo gastos activo
+        if (userBot === 'gastos') {
+          const gastosData = await getGastosData(jid);
+          if (gastosData.sheet_id) setCurrentSpreadsheetId(gastosData.sheet_id);
+          try {
+            await handleGastosMessage(msg, sock, gastosData.sheet_id);
+          } catch (err) {
+            console.error(`[Router] [USER] Gastos error jid=${jid}:`, err.message);
+            await sock.sendMessage(jid, { text: PREFIX + 'Hubo un error con el bot de finanzas. Intenta de nuevo.' });
+          }
+          continue;
+        }
+
+        // ============================================
+        // Groq IA por defecto
+        // ============================================
         // Onboarding completado: cargar personalidad si no está en memoria y delegar a Groq
         await loadPersonalityIfNeeded(jid, groqService);
         console.log(`[Router] [USER] → Groq jid=${jid}`);

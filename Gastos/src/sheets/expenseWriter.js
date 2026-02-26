@@ -1,13 +1,22 @@
 const { getOrCreateMonthTab } = require('./tabManager');
-const { getSheetsApi } = require('./sheetsClient');
+const { getSheetsApi, getDoc } = require('./sheetsClient');
 const { now, getFormattedDate, getFormattedTime, getDayOfWeek } = require('../utils/dateUtils');
 const { updateDashboard } = require('./dashboardUpdater');
-const config = require('../../config/default');
 const logger = require('../utils/logger');
 
-async function writeExpense({ description, amount, category, subcategory, tag }) {
+/**
+ * Escribe un gasto en la hoja del mes correspondiente.
+ * @param {object} params
+ * @param {string} params.description
+ * @param {number} params.amount
+ * @param {string} params.category
+ * @param {string} [params.subcategory]
+ * @param {string} [params.tag]
+ * @param {string|null} [params.targetMonth] - Nombre de pestaña destino (ej: "Enero 2026"). Null = mes actual.
+ */
+async function writeExpense({ description, amount, category, subcategory, tag, targetMonth }) {
   const dt = now();
-  const sheet = await getOrCreateMonthTab(dt);
+  const sheet = await getOrCreateMonthTab(dt, targetMonth || null);
 
   const row = {
     Fecha: getFormattedDate(dt),
@@ -25,9 +34,9 @@ async function writeExpense({ description, amount, category, subcategory, tag })
   // Center the newly added row
   try {
     const sheetsApi = await getSheetsApi();
-    const rowIndex = addedRow.rowNumber - 1; // 0-indexed
+    const rowIndex = addedRow.rowNumber - 1;
     await sheetsApi.spreadsheets.batchUpdate({
-      spreadsheetId: config.google.spreadsheetId,
+      spreadsheetId: (await getDoc()).spreadsheetId,
       requestBody: {
         requests: [
           {
@@ -55,7 +64,6 @@ async function writeExpense({ description, amount, category, subcategory, tag })
     logger.error(`Error formateando fila: ${err.message}`);
   }
 
-  // Update dashboard after writing
   try {
     await updateDashboard();
   } catch (err) {

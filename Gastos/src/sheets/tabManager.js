@@ -5,9 +5,14 @@ const logger = require('../utils/logger');
 
 const HEADERS = ['Fecha', 'Hora', 'Descripción', 'Monto', 'Categoría', 'Subcategoría', 'Día Semana'];
 
-async function getOrCreateMonthTab(dt) {
+/**
+ * Obtiene o crea la pestaña de un mes.
+ * @param {DateTime} dt - Fecha de referencia (para el mes actual si no hay override)
+ * @param {string|null} tabNameOverride - Nombre exacto de la pestaña (ej: "Enero 2025")
+ */
+async function getOrCreateMonthTab(dt, tabNameOverride = null) {
   const doc = await getDoc();
-  const tabName = getMonthTabName(dt);
+  const tabName = tabNameOverride || getMonthTabName(dt);
 
   let sheet = doc.sheetsByTitle[tabName];
   if (sheet) return sheet;
@@ -31,8 +36,8 @@ async function getOrCreateMonthTab(dt) {
 
   // Set column widths and default cell format for centering
   const sheetsApi = await getSheetsApi();
-  const spreadsheetId = config.google.spreadsheetId;
-  const colWidths = [120, 100, 220, 140, 160, 160, 130]; // Fecha, Hora, Descripción, Monto, Categoría, Subcategoría, Día Semana
+  const spreadsheetId = doc.spreadsheetId;
+  const colWidths = [120, 100, 220, 140, 160, 160, 130];
   const widthRequests = colWidths.map((px, i) => ({
     updateDimensionProperties: {
       range: { sheetId: sheet.sheetId, dimension: 'COLUMNS', startIndex: i, endIndex: i + 1 },
@@ -41,7 +46,6 @@ async function getOrCreateMonthTab(dt) {
     },
   }));
 
-  // Set default cell format to centered
   widthRequests.push({
     repeatCell: {
       range: { sheetId: sheet.sheetId, startRowIndex: 0, startColumnIndex: 0, endColumnIndex: 7 },

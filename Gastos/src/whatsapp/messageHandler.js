@@ -5,23 +5,25 @@ const { saveLearnedCategory } = require('../categories/learnedCategories');
 const { writeExpense } = require('../sheets/expenseWriter');
 const { getRecentExpenses, deleteExpense, editExpense } = require('../sheets/expenseReader');
 const { setConfig, getAllConfig } = require('../sheets/configManager');
+const { setCurrentSpreadsheetId } = require('../sheets/sheetsClient');
 const { getFinancialSummary } = require('../sheets/financialSummary');
 const { updateDashboard } = require('../sheets/dashboardUpdater');
 const { parseAmount } = require('../parser/amountParser');
 const { formatCOP } = require('../utils/formatCurrency');
+const { now, getMonthTabName, parseMonthInput } = require('../utils/dateUtils');
 const logger = require('../utils/logger');
 const { getMessageText, getInteractiveResponse, sendListMessage } = require('../../../src/messageUtils');
 
 const PREFIX = '\u200B';
 const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-// chatId -> { description, amount, parsed, sock, jid, timer }
+// chatId -> { description, amount, parsed, targetMonth, sock, jid, timer }
 const pendingCategories = new Map();
 
-// chatId -> [{ rowNumber, descripcion, monto, ... }] - last viewed list for deletion/editing
+// chatId -> { expenses: [...], tabName: string } - last viewed list for deletion/editing
 const lastViewedExpenses = new Map();
 
-// chatId -> { expense, timer } - pending edit waiting for user input
+// chatId -> { expense, tabName, timer } - pending edit waiting for user input
 const pendingEdits = new Map();
 
 const categoryMenu = categories
@@ -29,20 +31,31 @@ const categoryMenu = categories
   .join('\n');
 
 /**
+ * Extrae un sufijo de mes entre corchetes del texto: "Almuerzo 25k [enero]"
+ * @returns {{ cleanText: string, targetMonth: string|null }}
+ */
+function extractMonthSuffix(text) {
+  const bracketMatch = text.match(/\[([^\]]+)\]\s*$/);
+  if (!bracketMatch) return { cleanText: text, targetMonth: null };
+
+  const parsed = parseMonthInput(bracketMatch[1].trim());
+  if (!parsed) return { cleanText: text, targetMonth: null };
+
+  const cleanText = text.replace(/\[[^\]]+\]\s*$/, '').trim();
+  return { cleanText, targetMonth: parsed.tabName };
+}
+
+/**
  * Procesa un mensaje individual con el bot de Gastos.
  * @param {object} msg - Mensaje de Baileys
  * @param {object} sock - Socket de Baileys
+ * @param {string|null} spreadsheetId - ID del spreadsheet del usuario
  */
-async function handleGastosMessage(msg, sock) {
+async function handleGastosMessage(msg, sock, spreadsheetId) {
   try {
+    setCurrentSpreadsheetId(spreadsheetId);
+
     const jid = msg.key.remoteJid;
-
-    // Only process self-chat messages
-    const myNumber = process.env.MY_NUMBER;
-    const myJid = myNumber ? myNumber + '@s.whatsapp.net' : null;
-    const isSelfChat = (myJid && jid === myJid) || (jid.endsWith('@lid') && msg.key.fromMe);
-    if (!isSelfChat) return;
-
     const text = getMessageText(msg);
     if (!text || text.startsWith('\u200B') || text.startsWith('\u2713') || text.startsWith('\u2753') || text.startsWith('\uD83D\uDCCB') || text.startsWith('\uD83D\uDDD1') || text.startsWith('\u270F') || text.startsWith('\uD83D\uDCCA') || text.startsWith('\u2699') || text.startsWith('\uD83D\uDCB0')) return;
 
@@ -59,9 +72,8 @@ async function handleGastosMessage(msg, sock) {
       }
       await setConfig('Salario', amount);
       await setConfig('Tipo Base', 'salario');
-      try { await updateDashboard(); } catch (e) { /* dashboard will update on next expense */ }
+      try { await updateDashboard(); } catch (e) {}
       await _reply(sock, jid, msg, `Salario configurado: ${formatCOP(amount)}\n\nEl dashboard se calculara respecto a tu salario.`);
-      logger.info(`Config: Salario = ${amount}`);
       return;
     }
 
@@ -75,9 +87,8 @@ async function handleGastosMessage(msg, sock) {
       }
       await setConfig('Saldo Inicial', amount);
       await setConfig('Tipo Base', 'saldo');
-      try { await updateDashboard(); } catch (e) { /* dashboard will update on next expense */ }
+      try { await updateDashboard(); } catch (e) {}
       await _reply(sock, jid, msg, `Saldo inicial configurado: ${formatCOP(amount)}\n\nEl dashboard se calculara respecto a tu saldo.`);
-      logger.info(`Config: Saldo Inicial = ${amount}`);
       return;
     }
 
@@ -90,21 +101,18 @@ async function handleGastosMessage(msg, sock) {
         return;
       }
       await setConfig('Meta Ahorro Mensual', amount);
-      try { await updateDashboard(); } catch (e) { /* dashboard will update on next expense */ }
+      try { await updateDashboard(); } catch (e) {}
       await _reply(sock, jid, msg, `Meta de ahorro configurada: ${formatCOP(amount)} mensual`);
-      logger.info(`Config: Meta Ahorro = ${amount}`);
       return;
     }
 
     // --- Command: force dashboard update ---
     if (textLower === 'actualizar' || textLower === 'update') {
-      logger.info('Comando recibido: actualizar dashboard');
       await _reply(sock, jid, msg, 'Actualizando dashboard y hojas...');
       try {
         await updateDashboard();
         await _reply(sock, jid, msg, 'Dashboard, Ahorros y graficos actualizados correctamente.');
       } catch (err) {
-        logger.error(`Error actualizando dashboard: ${err.message}`);
         await _reply(sock, jid, msg, `Error al actualizar: ${err.message}`);
       }
       return;
@@ -112,7 +120,6 @@ async function handleGastosMessage(msg, sock) {
 
     // --- Command: financial summary ---
     if (textLower === 'resumen' || textLower === 'resumen financiero') {
-      logger.info('Comando recibido: resumen financiero');
       const summary = await getFinancialSummary();
       await _reply(sock, jid, msg, summary);
       return;
@@ -120,7 +127,6 @@ async function handleGastosMessage(msg, sock) {
 
     // --- Command: view config ---
     if (['config', 'ver config', 'configuracion', 'configuración', 'ver configuracion', 'ver configuración'].includes(textLower)) {
-      logger.info('Comando recibido: ver config');
       const cfg = await getAllConfig();
       const tipoBase = cfg['Tipo Base'] || 'No configurado';
       const salario = cfg['Salario'] ? formatCOP(cfg['Salario']) : 'No configurado';
@@ -146,16 +152,79 @@ async function handleGastosMessage(msg, sock) {
       return;
     }
 
-    // --- Command: view expenses ---
-    if (textLower === 'ver gastos' || textLower === 'gastos' || textLower === 'ver') {
-      logger.info('Comando recibido: ver gastos');
-      const expenses = await getRecentExpenses(10);
+    // --- Command: view accounts / balance ---
+    if (['cuentas', 'ver cuentas', 'mis cuentas', 'saldo', 'ver saldo', 'balance'].includes(textLower)) {
+      const cfg = await getAllConfig();
+      const lines = ['💰 *Estado de cuentas*\n'];
+      let totalBalance = 0;
+
+      if (cfg['Cuentas']) {
+        try {
+          const accounts = JSON.parse(cfg['Cuentas']);
+          accounts.forEach(a => {
+            lines.push(`🏦 *${a.name}:* ${formatCOP(a.balance)}`);
+            totalBalance += a.balance;
+          });
+          lines.push(`\n*Total:* ${formatCOP(totalBalance)}`);
+        } catch (_) {
+          if (cfg['Saldo Inicial']) lines.push(`💵 Saldo: ${formatCOP(cfg['Saldo Inicial'])}`);
+        }
+      } else if (cfg['Saldo Inicial']) {
+        lines.push(`💵 Saldo: ${formatCOP(cfg['Saldo Inicial'])}`);
+      } else {
+        lines.push('_No hay cuentas registradas._');
+        lines.push('_Usa_ *saldo 2.5M* _para configurar tu saldo._');
+      }
+
+      if (cfg['Criptomonedas']) {
+        try {
+          const crypto = JSON.parse(cfg['Criptomonedas']);
+          if (crypto.length > 0) {
+            lines.push('\n₿ *Criptomonedas:*');
+            crypto.forEach(c => lines.push(`  • ${c.amount} ${c.symbol}`));
+          }
+        } catch (_) {}
+      }
+
+      if (cfg['Divisas']) {
+        try {
+          const fx = JSON.parse(cfg['Divisas']);
+          if (fx.length > 0) {
+            lines.push('\n💱 *Divisas:*');
+            fx.forEach(f => lines.push(`  • ${f.amount} ${f.currency}`));
+          }
+        } catch (_) {}
+      }
+
+      await _reply(sock, jid, msg, lines.join('\n'));
+      return;
+    }
+
+    // --- Command: view expenses (with optional month) ---
+    // Supports: "ver gastos", "gastos", "ver", "ver gastos [enero]", "ver gastos enero 2025"
+    const verGastosSimple = (textLower === 'ver gastos' || textLower === 'gastos' || textLower === 'ver');
+    const verGastosConMes = !verGastosSimple && textLower.match(/^ver gastos\s+(.+)$/);
+
+    if (verGastosSimple || verGastosConMes) {
+      let targetTabName = null;
+      let mesLabel = 'este mes';
+
+      if (verGastosConMes) {
+        const monthArg = verGastosConMes[1].replace(/[\[\]()]/g, '').trim();
+        const parsed = parseMonthInput(monthArg);
+        if (parsed) {
+          targetTabName = parsed.tabName;
+          mesLabel = parsed.tabName;
+        }
+      }
+
+      const expenses = await getRecentExpenses(10, targetTabName);
       if (expenses.length === 0) {
-        await _reply(sock, jid, msg, 'No hay gastos registrados este mes.');
+        await _reply(sock, jid, msg, `No hay gastos registrados en *${mesLabel}*.\n\n_Usa [mes] para ver otro mes. Ej: ver gastos [enero]_`);
         return;
       }
 
-      lastViewedExpenses.set(chatId, expenses);
+      lastViewedExpenses.set(chatId, { expenses, tabName: targetTabName || getMonthTabName() });
 
       const lines = expenses.map((e, i) => {
         return `  *${i + 1}.* ${e.descripcion}  -  ${formatCOP(e.monto)}\n      _${e.categoria} | ${e.fecha}_`;
@@ -163,7 +232,7 @@ async function handleGastosMessage(msg, sock) {
       const divider = '─'.repeat(25);
 
       await _reply(sock, jid, msg,
-        `*Ultimos ${expenses.length} gastos*\n${divider}\n\n${lines.join('\n\n')}\n\n${divider}\n_borrar X  |  editar X_`
+        `*Ultimos ${expenses.length} gastos - ${mesLabel}*\n${divider}\n\n${lines.join('\n\n')}\n\n${divider}\n_borrar X  |  editar X_\n_ver gastos [mes] para otro mes_`
       );
       return;
     }
@@ -173,21 +242,22 @@ async function handleGastosMessage(msg, sock) {
     if (deleteMatch) {
       const num = parseInt(deleteMatch[1], 10);
       const viewed = lastViewedExpenses.get(chatId);
+      const expenses = viewed?.expenses || [];
 
-      if (!viewed || viewed.length === 0) {
+      if (!expenses.length) {
         await _reply(sock, jid, msg, 'Primero escribe "ver gastos" para ver la lista.');
         return;
       }
 
-      if (num < 1 || num > viewed.length) {
-        await _reply(sock, jid, msg, `Numero invalido. Escribe un numero entre 1 y ${viewed.length}.`);
+      if (num < 1 || num > expenses.length) {
+        await _reply(sock, jid, msg, `Numero invalido. Escribe un numero entre 1 y ${expenses.length}.`);
         return;
       }
 
-      const expense = viewed[num - 1];
-      logger.info(`Comando recibido: borrar gasto #${num} - ${expense.descripcion} ${formatCOP(expense.monto)}`);
+      const expense = expenses[num - 1];
+      const viewedTabName = viewed?.tabName || null;
 
-      await deleteExpense(expense.rowNumber);
+      await deleteExpense(expense.rowNumber, viewedTabName);
       lastViewedExpenses.delete(chatId);
 
       await _reply(sock, jid, msg,
@@ -201,18 +271,20 @@ async function handleGastosMessage(msg, sock) {
     if (editMatch) {
       const num = parseInt(editMatch[1], 10);
       const viewed = lastViewedExpenses.get(chatId);
+      const expenses = viewed?.expenses || [];
 
-      if (!viewed || viewed.length === 0) {
+      if (!expenses.length) {
         await _reply(sock, jid, msg, 'Primero escribe "ver gastos" para ver la lista.');
         return;
       }
 
-      if (num < 1 || num > viewed.length) {
-        await _reply(sock, jid, msg, `Numero invalido. Escribe un numero entre 1 y ${viewed.length}.`);
+      if (num < 1 || num > expenses.length) {
+        await _reply(sock, jid, msg, `Numero invalido. Escribe un numero entre 1 y ${expenses.length}.`);
         return;
       }
 
-      const expense = viewed[num - 1];
+      const expense = expenses[num - 1];
+      const viewedTabName = viewed?.tabName || null;
 
       const prevEdit = pendingEdits.get(chatId);
       if (prevEdit) clearTimeout(prevEdit.timer);
@@ -221,7 +293,7 @@ async function handleGastosMessage(msg, sock) {
         pendingEdits.delete(chatId);
       }, TIMEOUT_MS);
 
-      pendingEdits.set(chatId, { expense, timer });
+      pendingEdits.set(chatId, { expense, tabName: viewedTabName, timer });
 
       await _reply(sock, jid, msg,
         `*Editando gasto #${num}:*\n\n` +
@@ -234,8 +306,6 @@ async function handleGastosMessage(msg, sock) {
         `- *cat* numero (1-${categories.length})\n\n` +
         `${categoryMenu}`
       );
-
-      logger.info(`Comando recibido: editar gasto #${num} - ${expense.descripcion}`);
       return;
     }
 
@@ -252,12 +322,11 @@ async function handleGastosMessage(msg, sock) {
         pendingEdits.delete(chatId);
         lastViewedExpenses.delete(chatId);
 
-        await editExpense(pendingEdit.expense.rowNumber, { descripcion: newDesc });
+        await editExpense(pendingEdit.expense.rowNumber, { descripcion: newDesc }, pendingEdit.tabName);
 
         await _reply(sock, jid, msg,
           `Descripcion actualizada: ${pendingEdit.expense.descripcion} -> *${newDesc}*\n\n_Escribe "ver gastos" para ver la lista actualizada_`
         );
-        logger.info(`Gasto editado: descripcion "${pendingEdit.expense.descripcion}" -> "${newDesc}"`);
         return;
       }
 
@@ -271,12 +340,11 @@ async function handleGastosMessage(msg, sock) {
         pendingEdits.delete(chatId);
         lastViewedExpenses.delete(chatId);
 
-        await editExpense(pendingEdit.expense.rowNumber, { monto: newAmount });
+        await editExpense(pendingEdit.expense.rowNumber, { monto: newAmount }, pendingEdit.tabName);
 
         await _reply(sock, jid, msg,
           `Monto actualizado: ${formatCOP(pendingEdit.expense.monto)} -> *${formatCOP(newAmount)}*\n\n_Escribe "ver gastos" para ver la lista actualizada_`
         );
-        logger.info(`Gasto editado: monto ${pendingEdit.expense.monto} -> ${newAmount}`);
         return;
       }
 
@@ -291,12 +359,11 @@ async function handleGastosMessage(msg, sock) {
         pendingEdits.delete(chatId);
         lastViewedExpenses.delete(chatId);
 
-        await editExpense(pendingEdit.expense.rowNumber, { categoria: newCat.name });
+        await editExpense(pendingEdit.expense.rowNumber, { categoria: newCat.name }, pendingEdit.tabName);
 
         await _reply(sock, jid, msg,
           `Categoria actualizada: ${pendingEdit.expense.categoria} -> *${newCat.name}*\n\n_Escribe "ver gastos" para ver la lista actualizada_`
         );
-        logger.info(`Gasto editado: categoria "${pendingEdit.expense.categoria}" -> "${newCat.name}"`);
         return;
       }
     }
@@ -306,7 +373,6 @@ async function handleGastosMessage(msg, sock) {
     if (pending) {
       let selectedCategory = null;
 
-      // Detectar respuesta interactiva (lista)
       const interactive = getInteractiveResponse(msg);
       if (interactive && interactive.id && interactive.id.startsWith('cat_')) {
         const catIndex = parseInt(interactive.id.replace('cat_', ''), 10);
@@ -315,7 +381,6 @@ async function handleGastosMessage(msg, sock) {
         }
       }
 
-      // Detectar respuesta de texto (fallback numerico)
       if (!selectedCategory) {
         const choice = parseInt(text.trim(), 10);
         if (choice >= 1 && choice <= categories.length) {
@@ -335,18 +400,20 @@ async function handleGastosMessage(msg, sock) {
           category: selectedCategory.name,
           subcategory: pending.parsed.categoryHint || '',
           tag: pending.parsed.tag || '',
+          targetMonth: pending.targetMonth || null,
         });
 
+        const mesInfo = pending.targetMonth ? ` → _${pending.targetMonth}_` : '';
         await _reply(sock, jid, msg,
-          `Registrado: ${pending.description} ${formatCOP(pending.amount)} [${selectedCategory.name}] (aprendido)`
+          `Registrado: ${pending.description} ${formatCOP(pending.amount)} [${selectedCategory.name}]${mesInfo} (aprendido)`
         );
-
-        logger.info(`Gasto aprendido: "${pending.description}" -> ${selectedCategory.name}`);
         return;
       }
     }
 
-    const parsed = parseExpense(text);
+    // --- Parse expense (with optional month suffix) ---
+    const { cleanText, targetMonth } = extractMonthSuffix(text);
+    const parsed = parseExpense(cleanText);
     if (!parsed) return;
 
     const category = categorize(parsed.description, parsed.categoryHint);
@@ -363,23 +430,24 @@ async function handleGastosMessage(msg, sock) {
           category: 'Sin Categoría',
           subcategory: p.parsed.categoryHint || '',
           tag: p.parsed.tag || '',
+          targetMonth: p.targetMonth || null,
         });
 
         try {
+          const mesInfo = p.targetMonth ? ` → _${p.targetMonth}_` : '';
           await sock.sendMessage(jid, {
-            text: `Registrado: ${p.description} ${formatCOP(p.amount)} [Sin Categoria] (sin respuesta)`
+            text: `Registrado: ${p.description} ${formatCOP(p.amount)} [Sin Categoria]${mesInfo} (sin respuesta)`
           });
         } catch (err) {
           logger.error(`Error enviando timeout reply: ${err.message}`);
         }
-
-        logger.info(`Timeout categorizacion: "${p.description}" -> Sin Categoria`);
       }, TIMEOUT_MS);
 
       pendingCategories.set(chatId, {
         description: parsed.description,
         amount: parsed.amount,
         parsed,
+        targetMonth,
         timer,
       });
 
@@ -388,18 +456,15 @@ async function handleGastosMessage(msg, sock) {
         title: cat.name,
       }));
 
+      const mesInfo = targetMonth ? `\n_→ Se guardará en: ${targetMonth}_` : '';
       await sendListMessage(sock, jid,
-        `*${parsed.description}*  -  ${formatCOP(parsed.amount)}\n\nSelecciona la categoria:`,
+        `*${parsed.description}*  -  ${formatCOP(parsed.amount)}${mesInfo}\n\nSelecciona la categoria:`,
         "Responde con el numero",
         "Ver categorias",
         [{ title: "Categorias", rows: catRows }]
       );
-
-      logger.info(`Preguntando categoria para: ${parsed.description}`);
       return;
     }
-
-    logger.info(`Gasto detectado: ${parsed.description} ${formatCOP(parsed.amount)} [${category.name}]`);
 
     await writeExpense({
       description: parsed.description,
@@ -407,17 +472,16 @@ async function handleGastosMessage(msg, sock) {
       category: category.name,
       subcategory: parsed.categoryHint || '',
       tag: parsed.tag || '',
+      targetMonth,
     });
 
-    await _reply(sock, jid, msg, `*Registrado*\n${parsed.description}  -  ${formatCOP(parsed.amount)}  [${category.name}]`);
+    const mesInfo = targetMonth ? `\n_→ Guardado en: ${targetMonth}_` : '';
+    await _reply(sock, jid, msg, `*Registrado*\n${parsed.description}  -  ${formatCOP(parsed.amount)}  [${category.name}]${mesInfo}`);
   } catch (error) {
     logger.error(`Error procesando mensaje: ${error.message}`);
   }
 }
 
-/**
- * Helper para responder (quoted reply) en Baileys.
- */
 async function _reply(sock, jid, msg, text) {
   await sock.sendMessage(jid, { text: PREFIX + text }, { quoted: msg });
 }

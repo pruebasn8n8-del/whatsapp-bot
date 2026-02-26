@@ -1,23 +1,26 @@
 const { getDoc, getSheetsApi } = require('./sheetsClient');
 const { getMonthTabName } = require('../utils/dateUtils');
 const { updateDashboard } = require('./dashboardUpdater');
-const config = require('../../config/default');
 const logger = require('../utils/logger');
 
-async function getRecentExpenses(limit = 10) {
+/**
+ * Obtiene los últimos gastos del mes indicado.
+ * @param {number} limit
+ * @param {string|null} tabName - Nombre de la pestaña del mes (ej: "Enero 2026"). Null = mes actual.
+ */
+async function getRecentExpenses(limit = 10, tabName = null) {
   const doc = await getDoc();
-  const tabName = getMonthTabName();
-  const sheet = doc.sheetsByTitle[tabName];
+  const sheetTabName = tabName || getMonthTabName();
+  const sheet = doc.sheetsByTitle[sheetTabName];
   if (!sheet) return [];
 
   const rows = await sheet.getRows();
-  // Return the last N rows, most recent first, with their row index
   const result = [];
   const start = Math.max(0, rows.length - limit);
   for (let i = rows.length - 1; i >= start; i--) {
     result.push({
-      index: i, // index in the rows array
-      rowNumber: rows[i].rowNumber, // 1-indexed sheet row number
+      index: i,
+      rowNumber: rows[i].rowNumber,
       fecha: rows[i].get('Fecha') || '',
       hora: rows[i].get('Hora') || '',
       descripcion: rows[i].get('Descripción') || '',
@@ -28,15 +31,19 @@ async function getRecentExpenses(limit = 10) {
   return result;
 }
 
-async function deleteExpense(rowNumber) {
+/**
+ * Elimina un gasto por número de fila.
+ * @param {number} rowNumber
+ * @param {string|null} tabName - Nombre de la pestaña. Null = mes actual.
+ */
+async function deleteExpense(rowNumber, tabName = null) {
   const doc = await getDoc();
   const sheetsApi = await getSheetsApi();
-  const spreadsheetId = config.google.spreadsheetId;
-  const tabName = getMonthTabName();
-  const sheet = doc.sheetsByTitle[tabName];
-  if (!sheet) throw new Error('No se encontró la pestaña del mes actual');
+  const spreadsheetId = doc.spreadsheetId;
+  const sheetTabName = tabName || getMonthTabName();
+  const sheet = doc.sheetsByTitle[sheetTabName];
+  if (!sheet) throw new Error(`No se encontró la pestaña "${sheetTabName}"`);
 
-  // Delete the row using the Sheets API (deleteRange shifts rows up)
   await sheetsApi.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
@@ -46,7 +53,7 @@ async function deleteExpense(rowNumber) {
             range: {
               sheetId: sheet.sheetId,
               dimension: 'ROWS',
-              startIndex: rowNumber - 1, // 0-indexed
+              startIndex: rowNumber - 1,
               endIndex: rowNumber,
             },
           },
@@ -55,17 +62,21 @@ async function deleteExpense(rowNumber) {
     },
   });
 
-  logger.info(`Fila ${rowNumber} eliminada de ${tabName}`);
-
-  // Update dashboard after deletion
+  logger.info(`Fila ${rowNumber} eliminada de ${sheetTabName}`);
   await updateDashboard();
 }
 
-async function editExpense(rowNumber, fields) {
+/**
+ * Edita campos de un gasto.
+ * @param {number} rowNumber
+ * @param {object} fields - { descripcion, monto, categoria }
+ * @param {string|null} tabName - Nombre de la pestaña. Null = mes actual.
+ */
+async function editExpense(rowNumber, fields, tabName = null) {
   const doc = await getDoc();
-  const tabName = getMonthTabName();
-  const sheet = doc.sheetsByTitle[tabName];
-  if (!sheet) throw new Error('No se encontró la pestaña del mes actual');
+  const sheetTabName = tabName || getMonthTabName();
+  const sheet = doc.sheetsByTitle[sheetTabName];
+  if (!sheet) throw new Error(`No se encontró la pestaña "${sheetTabName}"`);
 
   const rows = await sheet.getRows();
   const row = rows.find(r => r.rowNumber === rowNumber);
@@ -76,7 +87,7 @@ async function editExpense(rowNumber, fields) {
   if (fields.categoria !== undefined) row.set('Categoría', fields.categoria);
 
   await row.save();
-  logger.info(`Fila ${rowNumber} editada en ${tabName}`);
+  logger.info(`Fila ${rowNumber} editada en ${sheetTabName}`);
 
   await updateDashboard();
 }
