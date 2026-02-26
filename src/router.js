@@ -575,7 +575,18 @@ function setupRouter(sock, groqService) {
             const gastosData = await getGastosData(jid);
             await handleGastosMessage(msg, sock, gastosData.sheet_id || null);
           } else {
-            await handleGroqMessage(msg, sock, groqService);
+            // Fallback: recuperar estado desde Supabase si la memoria se perdió (restart)
+            const gastosData = await getGastosData(jid);
+            if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
+              activeBot = 'gastos_onboarding';
+              const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
+              if (done) activeBot = 'gastos';
+            } else if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
+              activeBot = 'gastos';
+              await handleGastosMessage(msg, sock, gastosData.sheet_id);
+            } else {
+              await handleGroqMessage(msg, sock, groqService);
+            }
           }
           continue;
         }
@@ -743,9 +754,25 @@ function setupRouter(sock, groqService) {
         }
 
         // ============================================
-        // Groq IA por defecto
+        // Groq IA por defecto (con fallback a gastos si estaba mid-onboarding)
         // ============================================
-        // Onboarding completado: cargar personalidad si no está en memoria y delegar a Groq
+        // Fallback: si el servidor se reinició y el usuario estaba en onboarding de gastos,
+        // recuperar estado desde Supabase
+        {
+          const gastosData = await getGastosData(jid);
+          if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
+            userActiveBot.set(jid, 'gastos_onboarding');
+            const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
+            if (done) userActiveBot.set(jid, 'gastos');
+            continue;
+          }
+          if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id && userBot === 'gastos') {
+            userActiveBot.set(jid, 'gastos');
+            await handleGastosMessage(msg, sock, gastosData.sheet_id);
+            continue;
+          }
+        }
+
         await loadPersonalityIfNeeded(jid, groqService);
         console.log(`[Router] [USER] → Groq jid=${jid}`);
         try {
