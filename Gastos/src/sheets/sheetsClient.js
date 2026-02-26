@@ -105,30 +105,28 @@ async function getSheetsApi() {
 
 /**
  * Crea una nueva hoja de cálculo privada para un usuario.
+ * Usa Drive API (files.create con mimeType de Sheets) para evitar el 403
+ * que ocurre con sheets.create en algunos proyectos de GCP.
  * @param {string} title - Título de la hoja (ej: "Finanzas - 573219273071")
  * @returns {{ id: string, url: string }}
  */
 async function createUserSpreadsheet(title) {
-  const sheetsApi = await getSheetsApi();
-
-  // Verificar que el auth tiene credenciales válidas antes de crear
   const auth = await _getAuth();
   const client = await auth.getClient();
-  logger.info('[SheetsClient] Auth client type:', client.constructor.name);
+  const driveApi = google.drive({ version: 'v3', auth: client });
 
-  const response = await sheetsApi.spreadsheets.create({
+  logger.info(`[SheetsClient] Creando hoja via Drive API: "${title}"`);
+  const response = await driveApi.files.create({
     requestBody: {
-      properties: { title },
-      sheets: [
-        { properties: { title: 'Configuracion', index: 0 } },
-      ],
+      name: title,
+      mimeType: 'application/vnd.google-apps.spreadsheet',
     },
+    fields: 'id,webViewLink',
   });
 
-  const id = response.data.spreadsheetId;
-  const url = `https://docs.google.com/spreadsheets/d/${id}`;
-
-  logger.info(`Nueva hoja de cálculo creada: "${title}" → ${id}`);
+  const id = response.data.id;
+  const url = response.data.webViewLink || `https://docs.google.com/spreadsheets/d/${id}`;
+  logger.info(`[SheetsClient] Hoja creada: "${title}" → ${id}`);
   return { id, url };
 }
 
