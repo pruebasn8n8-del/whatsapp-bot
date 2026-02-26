@@ -194,11 +194,15 @@ async function connectWhatsApp() {
       }
 
       if (isReplaced) {
-        // 440: otra instancia/sesion nos reemplazo. Esperar 30s antes de reconectar
-        // para que la sesion competidora muera y no entrar en loop.
-        console.log('Conexion reemplazada (440). Esperando 30s antes de reconectar...');
-        await new Promise(r => setTimeout(r, 30000));
-        reconnectAttempts = 0;
+        // 440: sesion fantasma del container anterior sigue viva en WhatsApp.
+        // Reintentar cada 10s hasta que la sesion fantasma expire (~30s).
+        reconnectAttempts++;
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+          console.error(`440 persistente. Maximo de reintentos (${MAX_RECONNECT_ATTEMPTS}) alcanzado.`);
+          return;
+        }
+        console.log(`Conexion reemplazada (440). Reintentando en 10s... (intento ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+        await new Promise(r => setTimeout(r, 10000));
         await connectWhatsApp();
         return;
       }
@@ -360,7 +364,7 @@ async function main() {
   // Esperar a que Koyeb (o cualquier plataforma con rolling deploy) termine de matar
   // el container anterior antes de conectar a WhatsApp. Sin este delay, ambos containers
   // intentan conectar con las mismas credenciales → error 440 en loop.
-  const startupDelay = parseInt(process.env.STARTUP_DELAY_MS || '15000');
+  const startupDelay = parseInt(process.env.STARTUP_DELAY_MS || '20000');
   if (startupDelay > 0) {
     console.log(`Esperando ${startupDelay / 1000}s para que el container anterior cierre (anti-440)...`);
     await new Promise(r => setTimeout(r, startupDelay));
