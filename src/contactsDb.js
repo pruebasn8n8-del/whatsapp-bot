@@ -131,8 +131,45 @@ async function getBlockedContacts() {
   }
 }
 
+const MEMORY_MARKER = "\n\n--- MEMORIA PERSONAL ---\n";
+
+/**
+ * Agrega memoria extraida de la conversacion a la personalidad del contacto.
+ * Preserva la personalidad base y acumula entradas de memoria con fecha.
+ */
+async function appendMemory(jid, memoryText) {
+  try {
+    const contact = await getContact(jid);
+    const currentPersonality = contact?.personality || "";
+
+    let basePersonality = currentPersonality;
+    let existingMemory = "";
+
+    const markerIndex = currentPersonality.indexOf(MEMORY_MARKER);
+    if (markerIndex >= 0) {
+      basePersonality = currentPersonality.substring(0, markerIndex);
+      existingMemory = currentPersonality.substring(markerIndex + MEMORY_MARKER.length);
+    }
+
+    const date = new Date().toLocaleDateString("es-CO");
+    const newEntry = `[${date}]\n${memoryText}`;
+    let allMemory = existingMemory ? existingMemory + "\n\n" + newEntry : newEntry;
+
+    // Limitar tamanio para no saturar el prompt
+    if (allMemory.length > 1500) {
+      allMemory = "...(memorias anteriores condensadas)\n\n" + allMemory.substring(allMemory.length - 1200);
+    }
+
+    await upsertContact(jid, { personality: basePersonality + MEMORY_MARKER + allMemory });
+    return true;
+  } catch (err) {
+    console.error('[ContactsDB] appendMemory error:', err.message);
+    return false;
+  }
+}
+
 module.exports = {
   getContact, upsertContact, setPersonality, createContactIfNew,
   saveOnboardingSession, getOnboardingSessionFromDB, clearOnboardingSession,
-  isBlocked, blockContact, unblockContact, getBlockedContacts,
+  isBlocked, blockContact, unblockContact, getBlockedContacts, appendMemory,
 };

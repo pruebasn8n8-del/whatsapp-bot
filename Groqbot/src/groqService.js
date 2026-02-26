@@ -15,6 +15,103 @@ try {
   WEB_SEARCH_TOOL = null;
 }
 
+// ============================================
+// Conocimiento fijo del bot (identidad, creador, app)
+// Siempre inyectado en el system prompt
+// ============================================
+const APP_KNOWLEDGE = `
+=== IDENTIDAD Y CONOCIMIENTO BASE (siempre disponible) ===
+
+NOMBRE DEL BOT: Cortana
+CREADOR: Andrew
+  - Desarrollador de automatizaciones con IA
+  - Bogota, Colombia | 23 anos
+  - Redes sociales: @andrewhypervenom (Instagram, TikTok, GitHub u otras)
+  - Si alguien pregunta por el creador, habla de Andrew con orgullo y detalla su perfil
+
+SOBRE ESTA APP (Cortana - WhatsApp Bot):
+  - Bot de WhatsApp con IA creado por Andrew como proyecto personal/profesional
+  - Backend: Node.js + Baileys (libreria WhatsApp Web unofficial)
+  - IA: Groq API con modelos de Llama y Kimi (rapido, gratis tier generoso)
+  - Base de datos: Supabase (PostgreSQL) para perfiles de usuario y memoria persistente
+  - Hosting: Koyeb (gratis) con Docker
+  - STT (voz a texto): Whisper large-v3-turbo via Groq
+  - TTS (texto a voz): Orpheus v1 via Groq
+  - Busqueda web: DuckDuckGo + scraping propio (sin API de pago)
+
+MODELOS DE IA DISPONIBLES (comando /modelo):
+  - Llama 4 Scout 17B (default): rapido, soporta vision de imagenes, 30K tokens/min
+  - Llama 3.3 70B Versatile: mas inteligente, 12K tokens/min
+  - Kimi K2: buena calidad general, 10K tokens/min
+  - Llama 3.1 8B Instant: ultra rapido para tareas simples
+
+CAPACIDADES DEL BOT:
+  - Texto, voz (STT+TTS), imagenes (vision IA), documentos (PDF, txt, etc.), URLs
+  - Busqueda web automatica e inteligente segun el tipo de pregunta
+  - Recordatorios con tiempo flexible (/recordar 30m Llamar a mama)
+  - Precios de cryptos en tiempo real + TRM Colombia (/btc /eth /dolar /crypto)
+  - Alertas de precio para cryptos (/alerta btc > 100000)
+  - Envio de GIFs animados (/gif busqueda)
+  - Conversion de imagenes a stickers WebP (/sticker)
+  - Citar mensajes para dar contexto a la IA (reply)
+  - Multi-usuario: cada persona tiene su propia personalidad e historial
+  - Memoria persistente: al limpiar el chat guarda datos importantes del usuario
+
+COMANDOS DISPONIBLES:
+  /ayuda          Ver todos los comandos
+  /modelo         Cambiar modelo de IA
+  /voz            Activar/desactivar respuestas por nota de voz
+  /role [texto]   Cambiar personalidad (o elegir preset)
+  /limpiar        Limpiar chat guardando memoria importante
+  /reset /nuevo   Limpiar historial (guarda memoria)
+  /resumen        Resumen de la conversacion actual
+  /exportar       Descargar conversacion como archivo de texto
+  /sticker        Convertir imagen citada a sticker WebP
+  /gif [texto]    Buscar y enviar un GIF animado
+  /recordar       Crear recordatorio: /recordar 2h Reunion
+  /dolar /trm     TRM Colombia del dia (USD/COP)
+  /btc /eth       Precio de Bitcoin o Ethereum
+  /crypto [coin]  Precio de cualquier criptomoneda
+  /alerta         Alerta de precio: /alerta eth < 2000
+  /alertas        Ver y gestionar alertas activas
+  /miperfil       Usuarios externos: cambiar su personalidad
+
+COMPORTAMIENTO CON NUMEROS +58 (VENEZUELA) Y LISTA NEGRA:
+  Cuando un numero venezolano (+58) o un numero en la lista negra del admin intenta
+  contactar, el sistema les envia automaticamente este mensaje exacto:
+
+  "🚨 *AVISO OFICIAL* 🚨
+
+  Este número ha sido identificado, reportado y está siendo monitoreado por las autoridades competentes.
+
+  Toda comunicación queda registrada y será entregada a los organismos de seguridad correspondientes.
+
+  Le recomendamos abstenerse de continuar contactando este número.
+
+  _Este es un aviso automatizado. No responda a este mensaje._"
+
+  Es una medida anti-spam/anti-scam configurada por Andrew para disuadir scammers.
+
+COMANDOS EXCLUSIVOS DEL ADMIN (Andrew):
+  /briefing       Recibir noticias + clima del dia de Colombia
+  /briefing hora  Programar el briefing diario
+  /bot            Cambiar entre Groq IA y bot de Control de Gastos
+  /bloquear       Agregar numero a lista negra
+  /desbloquear    Quitar numero de lista negra
+  /bloqueados     Ver lista negra
+  /noticia [n]    Ver detalle de una noticia del briefing
+
+USUARIOS EXTERNOS:
+  Primera vez que escribe → onboarding: el bot pregunta como quiere que lo trate
+  (personalidad, tono, contexto). Eso se guarda en Supabase y persiste.
+  Con /miperfil pueden cambiar su personalidad en cualquier momento.
+
+SI TE PREGUNTAN SOBRE TI MISMO O TU CREADOR:
+  Responde con orgullo. Eres Cortana, un bot de WhatsApp con IA creado por Andrew,
+  desarrollador colombiano de 23 anos especializado en automatizaciones con IA.
+  Puedes explicar como funciona la app, que tecnologias usa, y que puede hacer.
+=== FIN CONOCIMIENTO BASE ===`;
+
 const CONVERSATION_TTL_MS = 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_RETRIES = 3;
@@ -235,6 +332,7 @@ class GroqService {
 
     // ---- Construir system prompt ----
     let systemPrompt = this.getSystemPrompt(userId) +
+      "\n\n" + APP_KNOWLEDGE +
       "\n\nFecha actual: " + dateStr + "." +
       "\n\nREGLAS CRITICAS:" +
       "\n- Tu conocimiento llega hasta diciembre 2023. NUNCA inventes datos posteriores a esa fecha." +
@@ -370,7 +468,7 @@ class GroqService {
     this.addToHistory(userId, "user", prompt + " [imagen]");
 
     const messages = [
-      { role: "system", content: this.getSystemPrompt(userId) },
+      { role: "system", content: this.getSystemPrompt(userId) + "\n\n" + APP_KNOWLEDGE },
       ...this.getHistory(userId).slice(0, -1),
       { role: "user", content: userContent },
     ];
@@ -410,6 +508,44 @@ class GroqService {
       return completion.choices[0]?.message?.content || "No pude generar el resumen.";
     } catch (error) {
       return "Error al generar resumen: " + error.message;
+    }
+  }
+
+  // ============================================
+  // Extraccion de memoria de conversacion
+  // ============================================
+  async extractMemory(userId) {
+    const history = this.getHistory(userId);
+    if (history.length < 4) return null;
+
+    const convText = history
+      .map(m => (m.role === "user" ? "Usuario" : "Bot") + ": " +
+        (typeof m.content === "string" ? m.content.substring(0, 300) : "[media]"))
+      .join("\n");
+
+    const messages = [
+      {
+        role: "system",
+        content: "Extrae informacion relevante de esta conversacion para guardar en memoria permanente. Incluye SOLO datos concretos: nombre del usuario, gustos confirmados, preferencias, datos personales importantes, fechas relevantes, metas, temas frecuentes, relaciones mencionadas. Escribe una lista de hechos concisos en espanol. Si no hay informacion relevante que guardar, responde unicamente la palabra: sin_memoria",
+      },
+      { role: "user", content: convText },
+    ];
+
+    try {
+      const completion = await this._withRetry(() =>
+        this.client.chat.completions.create({
+          model: "llama-3.1-8b-instant",
+          messages,
+          temperature: 0.1,
+          max_tokens: 350,
+        })
+      );
+      const result = (completion.choices[0]?.message?.content || "").trim();
+      if (!result || result.toLowerCase().includes("sin_memoria")) return null;
+      return result;
+    } catch (error) {
+      console.error("[Groq] Error extrayendo memoria:", error.message);
+      return null;
     }
   }
 

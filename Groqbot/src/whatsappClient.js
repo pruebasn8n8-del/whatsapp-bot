@@ -7,7 +7,7 @@ const { promisify } = require("util");
 const execAsync = promisify(exec);
 const GroqService = require("./groqService");
 const { getTRM, getCryptoPrice, searchCrypto, formatUSD, formatCOP: formatCOPPrice, formatChangeArrow } = require("./priceService");
-const { getMessageText, getInteractiveResponse, sendListMessage, unwrapMessage } = require("../../src/messageUtils");
+const { getMessageText, getInteractiveResponse, sendListMessage, sendButtonMessage, unwrapMessage } = require("../../src/messageUtils");
 
 // Importar ffmpeg del paquete npm
 let ffmpegPath = "ffmpeg";
@@ -30,7 +30,21 @@ const _reminders = new Map(); // chatId -> [{ text, timeout, time }]
 const _pendingModelo = new Map(); // chatId -> { options: [...keys], timestamp }
 const _pendingRole = new Map(); // chatId -> { options: [...keys], timestamp }
 const _priceAlerts = new Map(); // chatId -> [{ coin, condition, target, createdAt }]
+const _pendingClearConfirm = new Map(); // chatId -> { timestamp }
+const _cleanupPromptSent = new Map(); // chatId -> timestamp
 const SELECTION_TIMEOUT = 60 * 1000;
+const HISTORY_WARN_THRESHOLD = 14; // Sugerir limpieza al llegar a 14+ mensajes (70% del default 20)
+const CLEANUP_PROMPT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutos entre prompts de limpieza
+
+// Import lazy de contactsDb (puede no estar disponible si falta Supabase)
+let _contactsDb;
+function _getContactsDb() {
+  if (_contactsDb === undefined) {
+    try { _contactsDb = require("../../src/contactsDb"); }
+    catch (e) { _contactsDb = null; }
+  }
+  return _contactsDb;
+}
 const _tmpDir = path.join(process.cwd(), ".tmp_audio");
 if (!fs.existsSync(_tmpDir)) {
   fs.mkdirSync(_tmpDir, { recursive: true });
@@ -335,6 +349,53 @@ function _parseReminderTime(words) {
   return { ms: totalMs, consumed: consumed || 1 };
 }
 
+// ============================================
+// Limpieza inteligente: extrae memoria antes de limpiar
+// ============================================
+const MEMORY_MARKER_PROMPT = "\n\n--- MEMORIA PERSONAL ---\n";
+
+async function _smartClearHistory(sock, jid, chatId, groqService) {
+  const history = groqService.getHistory(chatId);
+
+  if (history.length >= 4) {
+    try {
+      const memory = await groqService.extractMemory(chatId);
+      if (memory) {
+        // Guardar en Supabase si esta disponible
+        const db = _getContactsDb();
+        if (db) {
+          try { await db.appendMemory(jid, memory); } catch (_) {}
+        }
+
+        // Actualizar prompt en memoria para la sesion actual
+        const currentPrompt = groqService.getSystemPrompt(chatId);
+        const date = new Date().toLocaleDateString("es-CO");
+        let newPrompt;
+        if (currentPrompt.includes(MEMORY_MARKER_PROMPT)) {
+          newPrompt = currentPrompt + "\n\n[" + date + "]\n" + memory;
+        } else {
+          newPrompt = currentPrompt + MEMORY_MARKER_PROMPT + "[" + date + "]\n" + memory;
+        }
+        groqService.setCustomPrompt(chatId, newPrompt);
+        groqService.clearHistory(chatId);
+        _cleanupPromptSent.delete(chatId);
+
+        const preview = memory.length > 280 ? memory.substring(0, 280) + "..." : memory;
+        await _sendText(sock, jid,
+          "Chat limpiado.\n\n*Guarde en memoria:*\n_" + preview + "_\n\nPuedes seguir hablando, recuerdo lo importante."
+        );
+        return;
+      }
+    } catch (e) {
+      console.error("[Groq] Error extrayendo memoria:", e.message);
+    }
+  }
+
+  groqService.clearHistory(chatId);
+  _cleanupPromptSent.delete(chatId);
+  await _sendText(sock, jid, "Chat limpiado. Puedes seguir hablando.");
+}
+
 /**
  * Procesa un mensaje individual con el bot de Groq.
  * @param {object} msg - Mensaje de Baileys (messages.upsert)
@@ -536,6 +597,17 @@ async function handleGroqMessage(msg, sock, groqService) {
       // ---- RESPUESTAS INTERACTIVAS (botones/listas) ----
       const interactive = getInteractiveResponse(msg);
       if (interactive && interactive.id) {
+        // Confirmacion de limpieza de chat
+        if (interactive.id === "limpiar_si") {
+          _pendingClearConfirm.delete(chatId);
+          await _smartClearHistory(sock, jid, chatId, groqService);
+          return;
+        }
+        if (interactive.id === "limpiar_no") {
+          _pendingClearConfirm.delete(chatId);
+          await _sendText(sock, jid, "Entendido, el chat continua.");
+          return;
+        }
         // Seleccion de modelo
         if (interactive.id.startsWith("modelo_")) {
           const modelKey = interactive.id.replace("modelo_", "");
@@ -570,6 +642,18 @@ async function handleGroqMessage(msg, sock, groqService) {
       // ---- SELECCION NUMERICA PENDIENTE (modelo/role) ----
       const num = parseInt(cmd, 10);
       if (!isNaN(num) && cmd === String(num)) {
+        // Pendiente de confirmacion de limpieza
+        const pendingClear = _pendingClearConfirm.get(chatId);
+        if (pendingClear && (num === 1 || num === 2)) {
+          _pendingClearConfirm.delete(chatId);
+          if (num === 1) {
+            await _smartClearHistory(sock, jid, chatId, groqService);
+          } else {
+            await _sendText(sock, jid, "Entendido, el chat continua.");
+          }
+          return;
+        }
+
         // Pendiente de /modelo
         const pendingM = _pendingModelo.get(chatId);
         if (pendingM && num >= 1 && num <= pendingM.options.length) {
@@ -609,9 +693,21 @@ async function handleGroqMessage(msg, sock, groqService) {
       // ---- COMANDOS ----
 
       if (cmd === "/reset" || cmd === "/nuevo") {
-        groqService.clearHistory(chatId);
-        groqService.resetCustomPrompt(chatId);
-        await _sendText(sock, jid, "Conversacion y rol reiniciados.");
+        await _smartClearHistory(sock, jid, chatId, groqService);
+        return;
+      }
+
+      if (cmd === "/limpiar") {
+        _pendingClearConfirm.set(chatId, { timestamp: Date.now() });
+        const histLen = groqService.getHistory(chatId).length;
+        await sendButtonMessage(sock, jid,
+          "*Limpiar chat*\n\nTienes " + histLen + " mensajes en el historial.\nAntes de limpiar guardare lo importante en mi memoria.",
+          "Responde 1 o 2",
+          [
+            { id: "limpiar_si", text: "Si, limpiar y guardar memoria", desc: "Guarda lo importante y comienza de nuevo" },
+            { id: "limpiar_no", text: "No, continuar sin limpiar", desc: "Mantener el historial actual" },
+          ]
+        );
         return;
       }
 
@@ -636,6 +732,7 @@ async function handleGroqMessage(msg, sock, groqService) {
           "  /sticker  -  Imagen a sticker",
           "  /gif _busqueda_  -  Enviar un GIF",
           "  /recordar _tiempo texto_  -  Recordatorio",
+          "  /limpiar  -  Limpiar chat y guardar memoria",
           "  /reset  -  Reiniciar conversacion",
           "  /stop  -  Desactivar bot",
           "",
@@ -1126,6 +1223,26 @@ async function handleGroqMessage(msg, sock, groqService) {
 
     console.log("[Groq] Respuesta enviada" + ((chatVoiceMode || isVoice) ? " (voz)" : " (texto)"));
 
+    // ========== DETECCION DE CHAT EXTENSO ==========
+    const historyLen = groqService.getHistory(chatId).length;
+    const maxH = groqService.maxHistory;
+    const warnAt = Math.max(10, maxH - Math.ceil(maxH * 0.3));
+    if (historyLen >= warnAt && !_pendingClearConfirm.has(chatId)) {
+      const lastPrompt = _cleanupPromptSent.get(chatId) || 0;
+      if (Date.now() - lastPrompt > CLEANUP_PROMPT_COOLDOWN_MS) {
+        _cleanupPromptSent.set(chatId, Date.now());
+        _pendingClearConfirm.set(chatId, { timestamp: Date.now() });
+        await sendButtonMessage(sock, jid,
+          "Chat extenso (" + historyLen + " mensajes)\n\nLimpiar mejora la calidad. Antes de hacerlo guardo lo importante en mi memoria.",
+          "Responde 1 o 2  |  O usa /limpiar cuando quieras",
+          [
+            { id: "limpiar_si", text: "Limpiar y guardar memoria", desc: "Guarda lo importante y comienza de nuevo" },
+            { id: "limpiar_no", text: "Continuar sin limpiar", desc: "Mantener el historial actual" },
+          ]
+        );
+      }
+    }
+
   } catch (error) {
     _stopPersistentTyping(typingInterval);
     console.error("[Groq] Error:", error.message);
@@ -1204,14 +1321,41 @@ async function _sendText(sock, jid, text) {
 }
 
 function _formatForWhatsApp(text) {
-  return text
-    .replace(/```(\w*)\n?([\s\S]*?)```/g, "```$2```")
-    .replace(/`([^`]+)`/g, "`$1`")
+  // Preservar bloques de codigo antes de cualquier transformacion
+  const codeBlocks = [];
+  let result = text.replace(/```[\s\S]*?```/g, (match) => {
+    codeBlocks.push(match.replace(/```(\w*)\n?([\s\S]*?)```/, "```$2```"));
+    return `\x00CODE${codeBlocks.length - 1}\x00`;
+  });
+
+  result = result
+    // Inline code — preservar tal cual
+    .replace(/`([^`\n]+)`/g, "`$1`")
+    // **negrita** y __negrita__ → *negrita* (WhatsApp)
     .replace(/\*\*(.+?)\*\*/g, "*$1*")
     .replace(/__(.+?)__/g, "*$1*")
+    // # Encabezados → *texto*
     .replace(/^#{1,6}\s+(.+)$/gm, "*$1*")
+    // [texto](url) → texto: url
     .replace(/\[(.+?)\]\((.+?)\)/g, "$1: $2")
-    .replace(/^[-=]{3,}$/gm, "");
+    // Lineas horizontales → eliminar
+    .replace(/^[-=]{3,}$/gm, "")
+    // Bullet lists con asterisco "* item" → "• item" (evita confusion con negrita)
+    .replace(/^(\s*)\* (.+)$/gm, "$1• $2")
+    // Quitar espacios dentro de negrita: * texto * → *texto*
+    .replace(/\* ([^*\n]+?) \*/g, "*$1*")
+    // Quitar espacios dentro de italica: _ texto _ → _texto_
+    .replace(/_ ([^_\n]+?) _/g, "_$1_")
+    // Limpiar 3+ saltos de linea consecutivos
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  // Restaurar bloques de codigo
+  codeBlocks.forEach((block, i) => {
+    result = result.replace(`\x00CODE${i}\x00`, block);
+  });
+
+  return result;
 }
 
 function _cleanupFiles(...files) {
