@@ -15,6 +15,23 @@ const GOAL_LABELS = {
   presupuesto: 'Presupuesto',
 };
 
+const FIELD_NAMES = {
+  goals: 'Objetivos',
+  salary: 'Ingresos',
+  payday: 'Día de pago',
+  accounts: 'Cuentas',
+  crypto: 'Criptomonedas',
+  fx_holdings: 'Divisas',
+  savings_goal: 'Meta de ahorro',
+};
+
+// Señales que indican corrección de un paso anterior
+const CORRECTION_SIGNALS = [
+  'no ', 'no,', 'no.', 'espera', 'perdón', 'perdon', 'en realidad',
+  'me corrijo', 'quise decir', 'quiero decir', 'eso no', 'no no',
+  'mentira', 'mejor dicho', 'o sea', 'o mejor', 'la verdad',
+];
+
 // ==================== Mensajes de cada paso ====================
 
 function msgGoals() {
@@ -61,7 +78,6 @@ function msgPayday(data) {
     '• _"El día 30"_',
     '• _"Los días 15 y 30"_ (quincena)',
     '• _"El último día del mes"_',
-    '• _"Los viernes"_ (semanal)',
   ].join('\n');
 }
 
@@ -70,21 +86,22 @@ function msgAccounts() {
     '¿Cuánto tienes actualmente en tus cuentas?',
     '',
     '• _"Tengo 500k en Nequi y 2M en Bancolombia"_',
-    '• _"Tengo como 1.5 millones en total"_',
+    '• _"Tengo 7.156 en Nequi y 2.850 en efectivo"_',
     '• _"No tengo nada ahora"_',
   ].join('\n');
 }
 
 function msgCrypto(data) {
   const total = (data.accounts || []).reduce((s, a) => s + (a.balance || 0), 0);
-  const accountsText = total > 0 ? `Cuentas: *${formatCOP(total)}* ✓` : 'Sin cuentas registradas ✓';
+  const accountsText = total > 0
+    ? `Cuentas: *${formatCOP(total)}* ✓`
+    : 'Sin cuentas registradas ✓';
   return [
     accountsText,
     '',
     '¿Tienes ahorros en criptomonedas o divisas extranjeras?',
     '',
     '• _"Tengo 0.05 BTC y 200 dólares"_',
-    '• _"Tengo 0.5 ETH en Binance"_',
     '• _"No tengo"_',
   ].join('\n');
 }
@@ -95,7 +112,7 @@ function msgSavingsGoal() {
     '',
     '¿Cuánto quieres ahorrar cada mes?',
     '',
-    '• _"300k al mes"_',
+    '• _"100k al mes"_',
     '• _"El 20% de lo que gano"_',
     '• _"Sin meta por ahora"_',
   ].join('\n');
@@ -107,36 +124,29 @@ function msgConfirm(data) {
   if (data.goals && data.goals.length) {
     lines.push('🎯 *Objetivos:* ' + data.goals.map(g => GOAL_LABELS[g] || g).join(', '));
   }
-
   if (data.salary) {
     const freq = { monthly: 'mensual', biweekly: 'quincenal', weekly: 'semanal', daily: 'diario' };
     lines.push(`💵 *Ingresos:* ${formatCOP(data.salary)} ${freq[data.salary_frequency] || data.salary_frequency}`);
   }
-
   if (data.payday && data.payday.length) {
     lines.push(`📅 *Día de pago:* ${data.payday.map(d => 'día ' + d).join(' y ')}`);
   }
-
   if (data.accounts && data.accounts.length > 0) {
     const total = data.accounts.reduce((s, a) => s + (a.balance || 0), 0);
     lines.push(`🏦 *Cuentas:* ${formatCOP(total)} total`);
     data.accounts.forEach(a => lines.push(`   • ${a.name}: ${formatCOP(a.balance)}`));
   }
-
   if (data.crypto && data.crypto.length > 0) {
     lines.push(`₿ *Cripto:* ${data.crypto.map(c => `${c.amount} ${c.symbol}`).join(', ')}`);
   }
-
   if (data.fx_holdings && data.fx_holdings.length > 0) {
     lines.push(`💱 *Divisas:* ${data.fx_holdings.map(f => `${f.amount} ${f.currency}`).join(', ')}`);
   }
-
   lines.push(`💰 *Meta de ahorro:* ${data.savings_goal ? formatCOP(data.savings_goal) + '/mes' : 'Sin meta'}`);
 
   lines.push('');
   lines.push('¿Todo correcto? Escribe *sí* para crear tu hoja.');
-  lines.push('O dime qué está mal y lo corrijo sin empezar de nuevo:');
-  lines.push('_Ej: "la meta es 100k" | "el salario es 3M" | "no tengo cuentas"_');
+  lines.push('Si algo está mal, dime qué: _"la meta es 100k"_ | _"el salario es 3M"_');
   lines.push('_Escribe *reiniciar* para empezar desde cero._');
 
   return lines.join('\n');
@@ -157,6 +167,22 @@ async function handleGastosOnboardingStep(sock, jid, text, groqService) {
   const data = gastos.onboarding_data || {};
 
   try {
+    // ---- Detector universal de correcciones (excepto en goals y confirm) ----
+    if (step !== 'goals' && step !== 'confirm') {
+      const correction = await _detectAndParseCorrection(text, data, groqService);
+      if (correction) {
+        const newData = { ...data, [correction.field]: correction.value };
+        await setGastosData(jid, { onboarding_data: newData });
+
+        // Determinar qué mensaje mostrar del paso actual (con data ya actualizada)
+        const currentMsg = _getCurrentStepMsg(step, newData);
+        await sock.sendMessage(jid, {
+          text: PREFIX + `✅ *${FIELD_NAMES[correction.field] || correction.field}* corregido.\n\n${currentMsg}`,
+        });
+        return false;
+      }
+    }
+
     switch (step) {
       case 'goals': {
         const parsed = await _parseGoals(text, groqService);
@@ -170,7 +196,7 @@ async function handleGastosOnboardingStep(sock, jid, text, groqService) {
         const parsed = await _parseIncome(text, groqService);
         if (!parsed.amount) {
           await sock.sendMessage(jid, {
-            text: PREFIX + 'No pude entender el monto 😅 Intenta así: _"Gano 3 millones al mes"_ o _"2.1M mensual"_',
+            text: PREFIX + 'No pude entender el monto. Intenta: _"Gano 2.1M al mes"_ o _"3 millones mensuales"_',
           });
           return false;
         }
@@ -214,7 +240,6 @@ async function handleGastosOnboardingStep(sock, jid, text, groqService) {
 
       case 'confirm': {
         const tl = text.trim().toLowerCase();
-
         const isYes = ['sí', 'si', 'yes', 'ok', 'listo', 'perfecto', 'claro', 'correcto', 'dale', 'va', 'confirmado', 'todo bien', 'esta bien', 'está bien'].some(w => tl.includes(w));
         const isRestart = ['reiniciar', 'empezar de nuevo', 'desde cero', 'reset', 'volver a empezar'].some(w => tl.includes(w));
 
@@ -226,34 +251,21 @@ async function handleGastosOnboardingStep(sock, jid, text, groqService) {
 
         if (isYes) {
           await sock.sendMessage(jid, { text: PREFIX + '⏳ Creando tu hoja de cálculo personal...' });
-          const success = await _completeOnboarding(sock, jid, data);
-          return success;
+          return await _completeOnboarding(sock, jid, data);
         }
 
-        // Intentar parsear como corrección puntual
-        const correction = await _parseCorrection(text, data, groqService);
-        if (correction.field && correction.value !== null && correction.value !== undefined) {
-          let newData;
-          // Para accounts y crypto, el valor es un array
-          if (correction.field === 'accounts' || correction.field === 'crypto' || correction.field === 'fx_holdings') {
-            newData = { ...data, [correction.field]: correction.value };
-          } else {
-            newData = { ...data, [correction.field]: correction.value };
-          }
+        // Parsear corrección puntual
+        const correction = await _parseFieldCorrection(text, data, groqService);
+        if (correction && correction.field) {
+          const newData = { ...data, [correction.field]: correction.value };
           await setGastosData(jid, { onboarding_step: 'confirm', onboarding_data: newData });
-          const fieldNames = {
-            goals: 'Objetivos', salary: 'Ingresos', payday: 'Día de pago',
-            accounts: 'Cuentas', crypto: 'Criptomonedas', fx_holdings: 'Divisas',
-            savings_goal: 'Meta de ahorro',
-          };
           await sock.sendMessage(jid, {
-            text: PREFIX + `✅ *${fieldNames[correction.field] || correction.field}* actualizado.\n\n${msgConfirm(newData)}`,
+            text: PREFIX + `✅ *${FIELD_NAMES[correction.field] || correction.field}* actualizado.\n\n${msgConfirm(newData)}`,
           });
         } else {
-          // No se pudo parsear la corrección, mostrar opciones
           await sock.sendMessage(jid, {
             text: PREFIX + [
-              '¿Qué quieres corregir? Dime el número o descríbeme qué está mal:',
+              '¿Qué quieres corregir? Dime el número o descríbeme el cambio:',
               '',
               '1️⃣  Objetivos',
               '2️⃣  Ingresos / salario',
@@ -285,8 +297,14 @@ async function resendCurrentStep(sock, jid) {
   const gastos = await getGastosData(jid);
   const step = gastos.onboarding_step;
   const data = gastos.onboarding_data || {};
+  const msg = _getCurrentStepMsg(step, data);
+  if (msg) {
+    await sock.sendMessage(jid, { text: PREFIX + '↩️ Continuamos donde lo dejamos:\n\n' + msg });
+  }
+}
 
-  const messages = {
+function _getCurrentStepMsg(step, data) {
+  const msgs = {
     goals: msgGoals(),
     income: msgIncome(data),
     payday: msgPayday(data),
@@ -295,11 +313,26 @@ async function resendCurrentStep(sock, jid) {
     savings_goal: msgSavingsGoal(),
     confirm: msgConfirm(data),
   };
+  return msgs[step] || null;
+}
 
-  const msg = messages[step];
-  if (msg) {
-    await sock.sendMessage(jid, { text: PREFIX + '↩️ Continuamos donde lo dejamos:\n\n' + msg });
+// ==================== Detector universal de correcciones ====================
+
+/**
+ * Detecta si el usuario está corrigiendo una respuesta anterior en mitad del flujo.
+ * Solo actúa cuando hay señales claras de corrección (no para respuestas normales).
+ * @returns {{ field, value } | null}
+ */
+async function _detectAndParseCorrection(text, data, groqService) {
+  const tl = text.trim().toLowerCase();
+  const hasSignal = CORRECTION_SIGNALS.some(s => tl.startsWith(s) || tl.includes(s));
+  if (!hasSignal) return null;
+
+  const result = await _parseFieldCorrection(text, data, groqService);
+  if (result && result.field && result.value !== null && result.value !== undefined) {
+    return result;
   }
+  return null;
 }
 
 // ==================== Finalización ====================
@@ -308,15 +341,10 @@ async function _completeOnboarding(sock, jid, data) {
   try {
     const phoneNum = jid.split('@')[0].split(':')[0];
     const { id: sheetId, url: sheetUrl } = await createUserSpreadsheet(`💰 Finanzas - ${phoneNum}`);
-
     setCurrentSpreadsheetId(sheetId);
 
     const totalBalance = (data.accounts || []).reduce((s, a) => s + (a.balance || 0), 0);
-
-    if (data.salary) {
-      await setConfig('Salario', data.salary);
-      await setConfig('Tipo Base', 'salario');
-    }
+    if (data.salary) { await setConfig('Salario', data.salary); await setConfig('Tipo Base', 'salario'); }
     if (totalBalance > 0) await setConfig('Saldo Inicial', totalBalance);
     if (data.savings_goal) await setConfig('Meta Ahorro Mensual', data.savings_goal);
     if (data.payday && data.payday.length) await setConfig('Dia Pago', data.payday.join(','));
@@ -343,28 +371,27 @@ async function _completeOnboarding(sock, jid, data) {
     });
 
     const divider = '─'.repeat(25);
-    const lines = [
-      '✅ *¡Tu perfil financiero está listo!*',
-      divider,
-      '',
-      '📊 Tu hoja de cálculo personal:',
-      `🔗 ${sheetUrl}`,
-      '',
-      '*Cómo registrar gastos:*',
-      'Escribe lo que gastaste en lenguaje natural:',
-      '  _"Almuerzo 25k"_ | _"Uber 15.000"_ | _"Netflix 20k"_',
-      '  Para otro mes: _"Almuerzo 25k [enero]"_',
-      '',
-      '*Comandos útiles:*',
-      '  _cuentas_ → ver saldo de tus cuentas',
-      '  _ver gastos_ → últimos registros del mes',
-      '  _ver gastos [enero]_ → ver otro mes',
-      '  _resumen_ → análisis financiero completo',
-      '  _/salir_ → volver al asistente de IA',
-      divider,
-    ];
-
-    await sock.sendMessage(jid, { text: PREFIX + lines.join('\n') });
+    await sock.sendMessage(jid, {
+      text: PREFIX + [
+        '✅ *¡Tu perfil financiero está listo!*',
+        divider,
+        '',
+        '📊 Tu hoja de cálculo personal:',
+        `🔗 ${sheetUrl}`,
+        '',
+        '*Cómo registrar gastos:*',
+        '  _"Almuerzo 25k"_ | _"Uber 15.000"_ | _"Netflix 20k"_',
+        '  Para otro mes: _"Almuerzo 25k [enero]"_',
+        '',
+        '*Comandos útiles:*',
+        '  _cuentas_ → ver saldo de tus cuentas',
+        '  _ver gastos_ → últimos registros del mes',
+        '  _ver gastos [enero]_ → ver otro mes',
+        '  _resumen_ → análisis financiero completo',
+        '  _/salir_ → volver al asistente de IA',
+        divider,
+      ].join('\n'),
+    });
     return true;
   } catch (err) {
     console.error('[GastosOnboarding] Error completando onboarding:', err.message);
@@ -378,12 +405,15 @@ async function _completeOnboarding(sock, jid, data) {
 
 // ==================== Parsers con Groq AI ====================
 
-const PARSER_SYSTEM_HEADER = `CONVERSIONES EXACTAS de pesos colombianos:
-- "k" SIEMPRE significa ×1.000 (miles): "100k" = 100.000, "500k" = 500.000, "50k" = 50.000
-- "M" SIEMPRE significa ×1.000.000 (millones): "1M" = 1.000.000, "2.1M" = 2.100.000
-- "un millón" = 1.000.000, "medio millón" = 500.000
-- "un millón y medio" = 1.500.000, "dos millones" = 2.000.000
-IMPORTANTE: "100k" = CIEN MIL (100.000), NO un millón.`;
+// Encabezado de conversiones que va en TODOS los prompts numéricos
+const NUM_HEADER = `REGLAS DE NÚMEROS EN PESOS COLOMBIANOS (leer con atención):
+1. El punto "." es separador de miles: "7.156" = siete mil ciento cincuenta y seis (7156). NO es decimal.
+2. La coma "," es decimal (raro en cantidades): "2,5M" = 2.500.000
+3. "k" = miles (×1.000): "100k"=100.000 | "50k"=50.000 | "500k"=500.000
+4. "M" = millones (×1.000.000): "1M"=1.000.000 | "2.1M"=2.100.000 | "3M"=3.000.000
+5. Números solos sin sufijo = valor exacto: "7156" = 7.156 | "2850" = 2.850
+6. "un millón" = 1.000.000 | "medio millón" = 500.000 | "dos millones" = 2.000.000
+NUNCA multipliques un número solo por 1000 a menos que tenga sufijo "k" o "mil".`;
 
 async function _groqParse(systemPrompt, userText, groqService) {
   try {
@@ -399,13 +429,12 @@ async function _groqParse(systemPrompt, userText, groqService) {
     });
     return JSON.parse(response.choices[0]?.message?.content || '{}');
   } catch (err) {
-    console.error('[GastosOnboarding] Error en Groq parse:', err.message);
+    console.error('[GastosOnboarding] Groq parse error:', err.message);
     return {};
   }
 }
 
 async function _parseGoals(text, groqService) {
-  // Respuestas numéricas directas
   const t = text.trim();
   if (t === '1') return { goals: ['control_gastos'] };
   if (t === '2') return { goals: ['ahorro'] };
@@ -414,9 +443,9 @@ async function _parseGoals(text, groqService) {
   if (t === '5') return { goals: ['control_gastos', 'ahorro', 'metas', 'inversion', 'presupuesto'] };
 
   return _groqParse(
-    `Eres un asistente financiero. El usuario dice qué objetivos financieros tiene.
+    `Eres un asistente financiero. El usuario expresa sus objetivos financieros.
 Extrae una lista de: "control_gastos", "ahorro", "metas", "inversion", "presupuesto".
-Si dice "todo", "todas", "todas las anteriores" o similar → incluye todos.
+Si dice "todo", "todas", "5", "todo lo anterior" → incluye todos.
 Responde SOLO con JSON: {"goals": ["control_gastos", "ahorro"]}`,
     text, groqService
   );
@@ -424,13 +453,13 @@ Responde SOLO con JSON: {"goals": ["control_gastos", "ahorro"]}`,
 
 async function _parseIncome(text, groqService) {
   return _groqParse(
-    `${PARSER_SYSTEM_HEADER}
+    `${NUM_HEADER}
 Eres un asistente financiero colombiano. El usuario dice cuánto gana.
 Extrae el monto en pesos colombianos y la frecuencia.
-Si dice "quincena" o "quincenal" → frequency: "biweekly".
-Si dice "semanal" → frequency: "weekly".
-Por defecto → frequency: "monthly".
-Si no hay monto claro → amount: null.
+- "quincena", "quincenal", "cada 15 días" → frequency: "biweekly"
+- "semanal", "cada semana" → frequency: "weekly"
+- Por defecto → frequency: "monthly"
+- Sin monto claro → amount: null
 Responde SOLO con JSON: {"amount": 2100000, "frequency": "monthly"}`,
     text, groqService
   );
@@ -439,22 +468,22 @@ Responde SOLO con JSON: {"amount": 2100000, "frequency": "monthly"}`,
 async function _parsePayday(text, groqService) {
   return _groqParse(
     `El usuario dice qué día(s) del mes le pagan.
-Extrae los números de día (1-31). "último día" o "fin de mes" = 30. "quincena" = [15, 30]. "el 1" o "primero" = [1].
-Si dice "los viernes" o frecuencia semanal → days: [].
-Responde SOLO con JSON: {"days": [1]} o {"days": [15, 30]} o {"days": []}`,
+Extrae los números de día (1-31). "último día"/"fin de mes" = 30. "quincena" = [15,30]. "el 1"/"primero" = [1].
+Si menciona días de semana ("viernes") → days: [].
+Responde SOLO con JSON: {"days": [1]} o {"days": [15,30]} o {"days": []}`,
     text, groqService
   );
 }
 
 async function _parseAccounts(text, groqService) {
   return _groqParse(
-    `${PARSER_SYSTEM_HEADER}
-El usuario dice cuánto tiene en sus cuentas bancarias o billeteras.
-Extrae nombre y saldo de cada cuenta en pesos colombianos.
-Si dice "no tengo" o "nada" o "cero" → accounts: [].
-Si dice una cantidad sin especificar banco → name: "Efectivo".
-Bancos comunes: Nequi, Bancolombia, Davivienda, BBVA, Falabella, Nu, Rappi, Efectivo.
-Responde SOLO con JSON: {"accounts": [{"name": "Nequi", "balance": 500000}]}`,
+    `${NUM_HEADER}
+El usuario dice cuánto tiene en sus cuentas/billeteras en pesos colombianos.
+IMPORTANTE: Cantidades sin sufijo como "7.156" = 7156 pesos. "2.850" = 2850 pesos.
+Si dice "no tengo" / "nada" / "cero" → accounts: [].
+Si no especifica banco → name: "Efectivo".
+Bancos: Nequi, Bancolombia, Davivienda, BBVA, Nu, Rappi, Efectivo, Daviplata.
+Responde SOLO con JSON: {"accounts": [{"name": "Nequi", "balance": 7156}, {"name": "Efectivo", "balance": 2850}]}`,
     text, groqService
   );
 }
@@ -462,9 +491,7 @@ Responde SOLO con JSON: {"accounts": [{"name": "Nequi", "balance": 500000}]}`,
 async function _parseCrypto(text, groqService) {
   return _groqParse(
     `El usuario dice si tiene criptomonedas y/o divisas extranjeras.
-Extrae cripto con símbolo (BTC, ETH, SOL, USDT...) y cantidad numérica.
-Extrae divisas fiat (USD, EUR, GBP...) con cantidad numérica.
-Si dice "no" o "nada" o "no tengo" → crypto: [], fx: [].
+Si dice "no" / "nada" / "no tengo" → crypto: [], fx: [].
 Responde SOLO con JSON: {"crypto": [{"symbol": "BTC", "amount": 0.05}], "fx": [{"currency": "USD", "amount": 200}]}`,
     text, groqService
   );
@@ -473,41 +500,41 @@ Responde SOLO con JSON: {"crypto": [{"symbol": "BTC", "amount": 0.05}], "fx": [{
 async function _parseSavingsGoal(text, data, groqService) {
   const salary = data.salary || 1000000;
   return _groqParse(
-    `${PARSER_SYSTEM_HEADER}
-El usuario quiere saber cuánto ahorrar mensualmente. Su salario es ${formatCOP(salary)} COP.
-Si dice un porcentaje, calcula: 20% de ${salary} = ${Math.round(salary * 0.2)}.
-Si dice "sin meta", "no tengo", "todavía no" → amount: null.
-Responde SOLO con JSON: {"amount": 100000} o {"amount": null}
-RECUERDA: "100k" = 100.000, "500k" = 500.000, "1M" = 1.000.000`,
+    `${NUM_HEADER}
+El usuario quiere ahorrar X por mes. Su salario es ${salary} COP.
+Si dice porcentaje: 20% de ${salary} = ${Math.round(salary * 0.2)}.
+Si dice "sin meta" / "no tengo" / "todavía no" → amount: null.
+Responde SOLO con JSON: {"amount": 100000} o {"amount": null}`,
     text, groqService
   );
 }
 
 /**
- * Parsea una corrección puntual en el paso de confirmación.
- * Retorna { field, value } donde field es el nombre del campo a corregir.
+ * Parsea una corrección puntual de cualquier campo del perfil.
+ * Usado tanto en el detector mid-flow como en el paso confirm.
  */
-async function _parseCorrection(text, data, groqService) {
+async function _parseFieldCorrection(text, data, groqService) {
   return _groqParse(
-    `${PARSER_SYSTEM_HEADER}
-El usuario está revisando su perfil financiero y quiere corregir un campo específico.
+    `${NUM_HEADER}
+El usuario está corrigiendo un dato de su perfil financiero.
 Datos actuales: ${JSON.stringify({ salary: data.salary, savings_goal: data.savings_goal, payday: data.payday, accounts: data.accounts })}
 
-Campos posibles:
+Determina QUÉ campo quiere cambiar y cuál es el NUEVO valor:
 - "goals": array de ["control_gastos","ahorro","metas","inversion","presupuesto"]
 - "salary": número en COP
 - "payday": array de días [1-31]
-- "accounts": array de {name, balance}
+- "accounts": array de {name, balance} — balances en COP exactos
 - "crypto": array de {symbol, amount}
 - "savings_goal": número en COP o null
 
-Determina qué campo quiere cambiar y cuál es el nuevo valor.
-Si el usuario dice "la meta es 100k" → field: "savings_goal", value: 100000
-Si el usuario dice "gano 3M" → field: "salary", value: 3000000
-Si el usuario dice "no tengo cuentas" → field: "accounts", value: []
-Si no está claro → field: null, value: null
+Ejemplos:
+- "la meta es 100k" → {"field":"savings_goal","value":100000}
+- "gano 3M" → {"field":"salary","value":3000000}
+- "tengo 7.156 en Nequi y 2.850 en efectivo" → {"field":"accounts","value":[{"name":"Nequi","balance":7156},{"name":"Efectivo","balance":2850}]}
+- "no tengo cuentas" → {"field":"accounts","value":[]}
+- Sin campo claro → {"field":null,"value":null}
 
-Responde SOLO con JSON: {"field": "savings_goal", "value": 100000}`,
+Responde SOLO con JSON.`,
     text, groqService
   );
 }
