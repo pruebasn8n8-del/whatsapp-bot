@@ -23,21 +23,34 @@ async function _getAuth() {
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/drive',
   ];
-  // En containers (Koyeb) las credenciales vienen por env vars
+
+  // Opción 1: JSON completo en base64 (más confiable, evita problemas de escaping)
+  if (process.env.GOOGLE_CREDENTIALS_BASE64) {
+    try {
+      const creds = JSON.parse(Buffer.from(process.env.GOOGLE_CREDENTIALS_BASE64, 'base64').toString('utf8'));
+      _auth = new GoogleAuth({ credentials: creds, scopes });
+      logger.info('[SheetsClient] Auth via GOOGLE_CREDENTIALS_BASE64');
+      return _auth;
+    } catch (e) {
+      logger.warn('[SheetsClient] Error parseando GOOGLE_CREDENTIALS_BASE64:', e.message);
+    }
+  }
+
+  // Opción 2: email + private key por separado
   if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
+    const privateKey = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
     _auth = new GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      },
+      credentials: { client_email: process.env.GOOGLE_CLIENT_EMAIL, private_key: privateKey },
       scopes,
     });
-    logger.info('[SheetsClient] Auth via env vars (GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY)');
-  } else {
-    const credPath = path.resolve(config.google.credentialsPath);
-    _auth = new GoogleAuth({ keyFile: credPath, scopes });
-    logger.info('[SheetsClient] Auth via archivo: ' + credPath);
+    logger.info('[SheetsClient] Auth via GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY');
+    return _auth;
   }
+
+  // Opción 3: archivo local (desarrollo)
+  const credPath = path.resolve(config.google.credentialsPath);
+  _auth = new GoogleAuth({ keyFile: credPath, scopes });
+  logger.info('[SheetsClient] Auth via archivo: ' + credPath);
   return _auth;
 }
 
@@ -97,6 +110,11 @@ async function getSheetsApi() {
  */
 async function createUserSpreadsheet(title) {
   const sheetsApi = await getSheetsApi();
+
+  // Verificar que el auth tiene credenciales válidas antes de crear
+  const auth = await _getAuth();
+  const client = await auth.getClient();
+  logger.info('[SheetsClient] Auth client type:', client.constructor.name);
 
   const response = await sheetsApi.spreadsheets.create({
     requestBody: {
