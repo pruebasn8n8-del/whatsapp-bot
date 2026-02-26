@@ -381,7 +381,14 @@ function setupRouter(sock, groqService) {
 
         // Onboarding completado: cargar personalidad si no está en memoria y delegar a Groq
         await loadPersonalityIfNeeded(jid, groqService);
-        await handleGroqMessage(msg, sock, groqService);
+        console.log(`[Router] [USER] → Groq jid=${jid}`);
+        try {
+          await handleGroqMessage(msg, sock, groqService);
+          console.log(`[Router] [USER] ← Groq OK jid=${jid}`);
+        } catch (groqErr) {
+          console.error(`[Router] [USER] ← Groq ERROR jid=${jid}:`, groqErr.message);
+          try { await sock.sendMessage(jid, { text: 'Hubo un error al responder. Intenta de nuevo.' }); } catch (_) {}
+        }
 
       } catch (error) {
         console.error('[Router] Error:', error.message);
