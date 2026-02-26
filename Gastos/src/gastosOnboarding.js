@@ -1,7 +1,7 @@
 // Gastos/src/gastosOnboarding.js - Onboarding con capa de verificación en cada paso
 
 const { getGastosData, setGastosData } = require('../../src/gastosDb');
-const { createUserSpreadsheet, setCurrentSpreadsheetId } = require('./sheets/sheetsClient');
+const { setCurrentSpreadsheetId, getDoc } = require('./sheets/sheetsClient');
 const { setConfig } = require('./sheets/configManager');
 const { formatCOP } = require('./utils/formatCurrency');
 
@@ -137,10 +137,26 @@ function msgConfirm(data) {
     lines.push(`💱 *Divisas:* ${data.fx_holdings.map(f => `${f.amount} ${f.currency}`).join(', ')}`);
   lines.push(`💰 *Meta de ahorro:* ${data.savings_goal ? formatCOP(data.savings_goal) + '/mes' : 'Sin meta'}`);
   lines.push('');
-  lines.push('¿Todo correcto? Escribe *sí* para crear tu hoja.');
+  lines.push('¿Todo correcto? Escribe *sí* para continuar.');
   lines.push('Si algo está mal, dime qué: _"la meta es 100k"_ | _"el salario es 3M"_');
   lines.push('_Escribe *reiniciar* para empezar desde cero._');
   return lines.join('\n');
+}
+
+function msgSheetSetup() {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_CLIENT_EMAIL || 'ver variable GOOGLE_CLIENT_EMAIL';
+  return [
+    '📊 *Último paso: conecta tu hoja de cálculo*',
+    '',
+    'Necesito que hagas esto (solo una vez):',
+    '',
+    '1️⃣ Ve a *sheets.google.com* y crea una hoja nueva',
+    '2️⃣ Haz clic en *Compartir* (arriba a la derecha)',
+    `3️⃣ Agrega este email como *Editor*:\n   \`${email}\``,
+    '4️⃣ Cópiame el *link* de tu hoja aquí',
+    '',
+    '_La hoja queda en tu Google Drive y es completamente tuya._',
+  ].join('\n');
 }
 
 // ==================== Flow principal ====================
@@ -252,8 +268,9 @@ async function handleGastosOnboardingStep(sock, jid, text, groqService) {
           return false;
         }
         if (isYes) {
-          await sock.sendMessage(jid, { text: PREFIX + '⏳ Creando tu hoja de cálculo personal...' });
-          return await _completeOnboarding(sock, jid, data);
+          await setGastosData(jid, { onboarding_step: 'sheet_setup', onboarding_data: data });
+          await sock.sendMessage(jid, { text: PREFIX + msgSheetSetup() });
+          return false;
         }
 
         // Corrección puntual en el resumen
@@ -277,6 +294,41 @@ async function handleGastosOnboardingStep(sock, jid, text, groqService) {
         return false;
       }
 
+      case 'sheet_setup': {
+        // El usuario manda el link o ID de su hoja de Google Sheets
+        const sheetId = _extractSheetId(text);
+        if (!sheetId) {
+          await sock.sendMessage(jid, {
+            text: PREFIX + [
+              '❌ No pude leer ese link. Asegúrate de que sea el link completo de Google Sheets:',
+              '_https://docs.google.com/spreadsheets/d/XXXX/edit_',
+              '',
+              'O mándame directamente el ID (la parte larga entre /d/ y /edit).',
+            ].join('\n'),
+          });
+          return false;
+        }
+        // Verificar que el bot tiene acceso a esa hoja
+        setCurrentSpreadsheetId(sheetId);
+        try {
+          await getDoc();
+        } catch (accessErr) {
+          const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_CLIENT_EMAIL || '';
+          await sock.sendMessage(jid, {
+            text: PREFIX + [
+              '❌ No tengo acceso a esa hoja.',
+              '',
+              'Verifica que la compartiste con este email como *Editor*:',
+              `\`${email}\``,
+              '',
+              'Luego mándame el link de nuevo.',
+            ].join('\n'),
+          });
+          return false;
+        }
+        return await _completeOnboarding(sock, jid, data, sheetId);
+      }
+
       default:
         return false;
     }
@@ -294,15 +346,28 @@ async function resendCurrentStep(sock, jid) {
 }
 
 function _getStepMsg(step, data) {
-  return { goals: msgGoals(), income: msgIncome(data), payday: msgPayday(data), accounts: msgAccounts(), crypto: msgCrypto(data), savings_goal: msgSavingsGoal(), confirm: msgConfirm(data) }[step] || null;
+  return {
+    goals: msgGoals(), income: msgIncome(data), payday: msgPayday(data),
+    accounts: msgAccounts(), crypto: msgCrypto(data), savings_goal: msgSavingsGoal(),
+    confirm: msgConfirm(data), sheet_setup: msgSheetSetup(),
+  }[step] || null;
+}
+
+function _extractSheetId(text) {
+  // Extraer ID de un link de Google Sheets o de un ID directo
+  const urlMatch = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]{20,})/);
+  if (urlMatch) return urlMatch[1];
+  // ID directo (cadena de 44 chars alfanuméricos)
+  const directMatch = text.trim().match(/^([a-zA-Z0-9_-]{20,})$/);
+  if (directMatch) return directMatch[1];
+  return null;
 }
 
 // ==================== Finalización ====================
 
-async function _completeOnboarding(sock, jid, data) {
+async function _completeOnboarding(sock, jid, data, sheetId) {
   try {
-    const phoneNum = jid.split('@')[0].split(':')[0];
-    const { id: sheetId, url: sheetUrl } = await createUserSpreadsheet(`💰 Finanzas - ${phoneNum}`);
+    const sheetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}`;
     setCurrentSpreadsheetId(sheetId);
     const totalBalance = (data.accounts || []).reduce((s, a) => s + (a.balance || 0), 0);
     if (data.salary) { await setConfig('Salario', data.salary); await setConfig('Tipo Base', 'salario'); }
