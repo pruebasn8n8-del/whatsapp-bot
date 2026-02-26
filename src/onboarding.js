@@ -1,5 +1,5 @@
 // src/onboarding.js - Onboarding conversacional multi-paso estilo OpenClaw
-const { getContact, setPersonality, upsertContact } = require('./contactsDb');
+const { getContact, setPersonality, upsertContact, saveOnboardingSession, getOnboardingSessionFromDB, clearOnboardingSession } = require('./contactsDb');
 
 // Estado en memoria: jid -> { step, data, timestamp }
 const _sessions = new Map();
@@ -85,17 +85,35 @@ function buildPersonality(nombre, uso, vibe) {
  * 'new' | 'in_progress' | 'done'
  */
 async function getOnboardingState(jid) {
+  // 1. Verificar sesión en memoria
   const session = _sessions.get(jid);
   if (session) {
     if (Date.now() - session.timestamp > TIMEOUT_MS) {
       _sessions.delete(jid);
-      // Reiniciar si expiró
-      return 'new';
+    } else {
+      return 'in_progress';
     }
-    return 'in_progress';
   }
+  // 2. Fallback a Supabase (sobrevive reinicios del servidor)
   const contact = await getContact(jid);
   if (contact?.onboarding_done) return 'done';
+  if (contact?.onboarding_step) {
+    // Si la sesión tiene más de 24h, descartarla y reiniciar
+    const updatedAt = contact.updated_at ? new Date(contact.updated_at).getTime() : 0;
+    const stale = Date.now() - updatedAt > 24 * 60 * 60 * 1000;
+    if (stale) {
+      await clearOnboardingSession(jid).catch(() => {});
+      await upsertContact(jid, { onboarding_step: null, onboarding_data: null, onboarding_done: false });
+      return 'new';
+    }
+    // Restaurar sesión en memoria desde Supabase
+    _sessions.set(jid, {
+      step: contact.onboarding_step,
+      data: contact.onboarding_data || {},
+      timestamp: Date.now(),
+    });
+    return 'in_progress';
+  }
   return 'new';
 }
 
@@ -103,8 +121,10 @@ async function getOnboardingState(jid) {
  * Inicia el onboarding: envía el primer mensaje y crea la sesión.
  */
 async function startOnboarding(sock, jid, pushName) {
+  const data = { pushName };
   await upsertContact(jid, { name: pushName || null, onboarding_done: false });
-  _sessions.set(jid, { step: STEPS.WELCOME, data: { pushName }, timestamp: Date.now() });
+  await saveOnboardingSession(jid, STEPS.WELCOME, data);
+  _sessions.set(jid, { step: STEPS.WELCOME, data, timestamp: Date.now() });
   await sock.sendMessage(jid, { text: MSG_WELCOME(pushName) });
 }
 
@@ -120,29 +140,28 @@ async function handleOnboardingStep(sock, jid, userText, groqService) {
   const text = userText.trim();
 
   if (session.step === STEPS.WELCOME) {
-    // El usuario describió para qué quiere usar el bot
     session.data.uso = text;
     session.step = STEPS.NAME;
+    await saveOnboardingSession(jid, STEPS.NAME, session.data);
     await sock.sendMessage(jid, { text: MSG_NAME(text) });
     return false;
   }
 
   if (session.step === STEPS.NAME) {
-    // El usuario dijo su nombre
-    const nombre = text.split(' ')[0]; // solo primer nombre
+    const nombre = text.split(' ')[0];
     session.data.nombre = nombre;
     session.step = STEPS.VIBE;
+    await saveOnboardingSession(jid, STEPS.VIBE, session.data);
     await sock.sendMessage(jid, { text: MSG_VIBE(nombre) });
     return false;
   }
 
   if (session.step === STEPS.VIBE) {
-    // El usuario eligió el vibe
     session.data.vibe = parseVibe(text);
-    const { nombre, uso, vibe } = session.data;
+    const { nombre, uso } = session.data;
 
-    // Construir y guardar la personalidad
     const personality = buildPersonality(nombre, uso, session.data.vibe);
+    await clearOnboardingSession(jid);
     await setPersonality(jid, personality, nombre);
     groqService.setCustomPrompt(jid, personality);
     groqService.clearHistory(jid);

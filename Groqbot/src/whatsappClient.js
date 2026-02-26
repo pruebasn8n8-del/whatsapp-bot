@@ -7,7 +7,7 @@ const { promisify } = require("util");
 const execAsync = promisify(exec);
 const GroqService = require("./groqService");
 const { getTRM, getCryptoPrice, searchCrypto, formatUSD, formatCOP: formatCOPPrice, formatChangeArrow } = require("./priceService");
-const { getMessageText, getInteractiveResponse, sendListMessage } = require("../../src/messageUtils");
+const { getMessageText, getInteractiveResponse, sendListMessage, unwrapMessage } = require("../../src/messageUtils");
 
 // Importar ffmpeg del paquete npm
 let ffmpegPath = "ffmpeg";
@@ -75,12 +75,13 @@ async function _convertToWebpSticker(buffer) {
 function _getMsgType(msg) {
   const m = msg.message;
   if (!m) return null;
-  if (m.audioMessage) return m.audioMessage.ptt ? 'ptt' : 'audio';
-  if (m.imageMessage) return 'image';
-  if (m.stickerMessage) return 'sticker';
-  if (m.videoMessage) return 'video';
-  if (m.documentMessage || m.documentWithCaptionMessage) return 'document';
-  if (m.conversation || m.extendedTextMessage) return 'text';
+  const base = unwrapMessage(m);
+  if (base.audioMessage) return base.audioMessage.ptt ? 'ptt' : 'audio';
+  if (base.imageMessage) return 'image';
+  if (base.stickerMessage) return 'sticker';
+  if (base.videoMessage) return 'video';
+  if (base.documentMessage || base.documentWithCaptionMessage) return 'document';
+  if (base.conversation || base.extendedTextMessage) return 'text';
   return null;
 }
 
@@ -92,20 +93,22 @@ function _hasMedia(msg) {
 function _getMediaMimetype(msg) {
   const m = msg.message;
   if (!m) return '';
-  if (m.audioMessage) return m.audioMessage.mimetype || '';
-  if (m.imageMessage) return m.imageMessage.mimetype || '';
-  if (m.stickerMessage) return m.stickerMessage.mimetype || '';
-  if (m.videoMessage) return m.videoMessage.mimetype || '';
-  if (m.documentMessage) return m.documentMessage.mimetype || '';
-  if (m.documentWithCaptionMessage?.message?.documentMessage) return m.documentWithCaptionMessage.message.documentMessage.mimetype || '';
+  const base = unwrapMessage(m);
+  if (base.audioMessage) return base.audioMessage.mimetype || '';
+  if (base.imageMessage) return base.imageMessage.mimetype || '';
+  if (base.stickerMessage) return base.stickerMessage.mimetype || '';
+  if (base.videoMessage) return base.videoMessage.mimetype || '';
+  if (base.documentMessage) return base.documentMessage.mimetype || '';
+  if (base.documentWithCaptionMessage?.message?.documentMessage) return base.documentWithCaptionMessage.message.documentMessage.mimetype || '';
   return '';
 }
 
 function _getDocumentFilename(msg) {
   const m = msg.message;
   if (!m) return 'documento';
-  if (m.documentMessage) return m.documentMessage.fileName || 'documento';
-  if (m.documentWithCaptionMessage?.message?.documentMessage) return m.documentWithCaptionMessage.message.documentMessage.fileName || 'documento';
+  const base = unwrapMessage(m);
+  if (base.documentMessage) return base.documentMessage.fileName || 'documento';
+  if (base.documentWithCaptionMessage?.message?.documentMessage) return base.documentWithCaptionMessage.message.documentMessage.fileName || 'documento';
   return 'documento';
 }
 
@@ -360,15 +363,8 @@ async function handleGroqMessage(msg, sock, groqService) {
     if (!mentionedMe && !quotedMe) return;
   }
 
-  const myNumber = process.env.MY_NUMBER;
-  const myJid = myNumber ? myNumber + "@s.whatsapp.net" : null;
-  const myLid = sock.user?.lid?.replace(/:\d+@/, "@");
-  const isSelfChat = (myJid && jid === myJid) || (myLid && jid === myLid);
-
-  // En chats individuales, solo procesar mensajes de mi propio chat (self-chat)
-  if (!isGroup) {
-    if (!isSelfChat) return;
-  }
+  // Chats individuales: responder a cualquier JID (el router ya filtra quién llega aquí)
+  // No aplicar restricción de self-chat — multi-usuario gestionado en router.js
 
   // Determinar tipo de media
   const msgType = _getMsgType(msg);

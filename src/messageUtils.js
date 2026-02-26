@@ -4,17 +4,32 @@
 const PREFIX = '\u200B'; // Zero-width space prefix for bot messages
 
 /**
+ * Desempaqueta wrappers de protocolo de WhatsApp (ephemeral, viewOnce, deviceSent).
+ * Retorna el mensaje interno o el original si no hay wrapper.
+ */
+function unwrapMessage(m) {
+  if (!m) return m;
+  return m.ephemeralMessage?.message
+    || m.viewOnceMessage?.message
+    || m.viewOnceMessageV2?.message?.message
+    || m.deviceSentMessage?.message
+    || m;
+}
+
+/**
  * Extrae el texto del cuerpo de un mensaje Baileys.
+ * Maneja wrappers de mensajes efímeros, viewOnce y deviceSent.
  */
 function getMessageText(msg) {
   const m = msg.message;
   if (!m) return '';
-  return m.conversation
-    || m.extendedTextMessage?.text
-    || m.imageMessage?.caption
-    || m.videoMessage?.caption
-    || m.documentMessage?.caption
-    || m.documentWithCaptionMessage?.message?.documentMessage?.caption
+  const base = unwrapMessage(m);
+  return base.conversation
+    || base.extendedTextMessage?.text
+    || base.imageMessage?.caption
+    || base.videoMessage?.caption
+    || base.documentMessage?.caption
+    || base.documentWithCaptionMessage?.message?.documentMessage?.caption
     || '';
 }
 
@@ -101,4 +116,4 @@ async function sendListMessage(sock, jid, title, footer, _buttonText, sections) 
   await sock.sendMessage(jid, { text: PREFIX + text });
 }
 
-module.exports = { getMessageText, getInteractiveResponse, sendButtonMessage, sendListMessage, PREFIX };
+module.exports = { getMessageText, getInteractiveResponse, sendButtonMessage, sendListMessage, PREFIX, unwrapMessage };

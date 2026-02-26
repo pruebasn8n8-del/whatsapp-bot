@@ -79,6 +79,8 @@ function setupRouter(sock, groqService) {
 
         if (body || interactive) {
           console.log(`[Router] ${isAdmin(jid) ? '[ADMIN]' : '[USER]'} jid=${jid} nombre="${pushName || ''}" texto="${(body || '').substring(0, 50)}"`);
+        } else if (msg.message) {
+          console.log(`[Router] DEBUG empty body jid=${jid} msg.message keys: ${Object.keys(msg.message).join(',')}`);
         }
 
         // Marcar mensaje como leído
