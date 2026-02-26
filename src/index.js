@@ -349,6 +349,42 @@ app.get('/health', (req, res) => {
 });
 
 // ============================================
+// Keep-alive: self-ping para evitar que Koyeb duerma el servicio
+// Koyeb free tier duerme despues de ~5 min sin trafico entrante.
+// Configurar APP_URL en las variables de entorno de Koyeb con la URL publica.
+// ============================================
+function startKeepAlive() {
+  const appUrl = process.env.APP_URL;
+  if (!appUrl) {
+    console.log('[KeepAlive] APP_URL no configurado - el servicio puede dormir por inactividad.');
+    console.log('[KeepAlive] Agrega APP_URL=https://tu-app.koyeb.app en las env vars de Koyeb.');
+    return;
+  }
+
+  const pingUrl = appUrl.replace(/\/$/, '') + '/health';
+  const PING_INTERVAL_MS = 4 * 60 * 1000; // cada 4 minutos
+
+  const doPing = () => {
+    const https = require('https');
+    const http = require('http');
+    const mod = pingUrl.startsWith('https') ? https : http;
+    const req = mod.get(pingUrl, { timeout: 10000 }, (res) => {
+      console.log('[KeepAlive] Ping OK -', res.statusCode);
+    });
+    req.on('error', (e) => console.log('[KeepAlive] Ping error:', e.message));
+    req.on('timeout', () => { req.destroy(); console.log('[KeepAlive] Ping timeout'); });
+  };
+
+  // Primer ping a los 30s del arranque, luego cada 4 minutos
+  setTimeout(() => {
+    doPing();
+    setInterval(doPing, PING_INTERVAL_MS);
+  }, 30000);
+
+  console.log('[KeepAlive] Iniciado - pinging', pingUrl, 'cada 4 minutos');
+}
+
+// ============================================
 // Arrancar
 // ============================================
 async function main() {
@@ -370,6 +406,7 @@ async function main() {
   app.listen(PORT, () => {
     console.log(`Dashboard: http://localhost:${PORT}`);
     console.log(`Health: http://localhost:${PORT}/health\n`);
+    startKeepAlive();
   });
 
   // Esperar a que Koyeb (o cualquier plataforma con rolling deploy) termine de matar
