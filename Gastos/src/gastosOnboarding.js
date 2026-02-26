@@ -313,8 +313,9 @@ async function _completeOnboarding(sock, jid, data) {
     });
     return true;
   } catch (err) {
-    console.error('[GastosOnboarding] Error completando:', err.message);
-    await sock.sendMessage(jid, { text: PREFIX + `Error creando tu hoja: ${err.message.substring(0, 100)}\nIntenta de nuevo con /gastos.` });
+    const detail = err.response?.data?.error?.message || err.message;
+    console.error('[GastosOnboarding] Error completando:', detail, err.stack?.split('\n')[1]);
+    await sock.sendMessage(jid, { text: PREFIX + `Error creando tu hoja: ${detail.substring(0, 120)}\nIntenta de nuevo con /gastos.` });
     await setGastosData(jid, { onboarding_step: null });
     return false;
   }

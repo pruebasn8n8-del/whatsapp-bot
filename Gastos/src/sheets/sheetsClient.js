@@ -19,14 +19,25 @@ let _currentSpreadsheetId = null;
 
 async function _getAuth() {
   if (_auth) return _auth;
-  const credPath = path.resolve(config.google.credentialsPath);
-  _auth = new GoogleAuth({
-    keyFile: credPath,
-    scopes: [
-      'https://www.googleapis.com/auth/spreadsheets',
-      'https://www.googleapis.com/auth/drive',
-    ],
-  });
+  const scopes = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive',
+  ];
+  // En containers (Koyeb) las credenciales vienen por env vars
+  if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
+    _auth = new GoogleAuth({
+      credentials: {
+        client_email: process.env.GOOGLE_CLIENT_EMAIL,
+        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      },
+      scopes,
+    });
+    logger.info('[SheetsClient] Auth via env vars (GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY)');
+  } else {
+    const credPath = path.resolve(config.google.credentialsPath);
+    _auth = new GoogleAuth({ keyFile: credPath, scopes });
+    logger.info('[SheetsClient] Auth via archivo: ' + credPath);
+  }
   return _auth;
 }
 
