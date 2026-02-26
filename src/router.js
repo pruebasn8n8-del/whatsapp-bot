@@ -103,6 +103,18 @@ function setupRouter(sock, groqService) {
         // COMANDOS UNIVERSALES (admin y usuarios)
         // ============================================
 
+        // /resetgastos - cualquier usuario puede reiniciar su propio perfil de gastos
+        if (textLower === '/resetgastos') {
+          const { resetGastosData } = require('./gastosDb');
+          await resetGastosData(jid);
+          userActiveBot.delete(jid);
+          if (isAdmin(jid)) activeBot = null;
+          await sock.sendMessage(jid, {
+            text: PREFIX + '✅ Tu perfil de gastos fue reiniciado.\nEscribe /gastos para configurarlo de nuevo.',
+          });
+          continue;
+        }
+
         // /noticias - obtener noticias ahora (con preferencias del usuario)
         if (textLower === '/noticias') {
           try {
