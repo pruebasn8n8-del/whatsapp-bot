@@ -325,6 +325,17 @@ app.get('/', (req, res) => {
 </html>`);
 });
 
+// Endpoint de diagnóstico: llama Groq directamente sin WhatsApp
+app.get('/test-groq', async (req, res) => {
+  try {
+    const reply = await groqService.chat('__test__', 'Responde solo: OK');
+    groqService.clearHistory('__test__');
+    res.json({ ok: true, reply: reply.substring(0, 200) });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: isReady ? 'ok' : 'disconnected',
