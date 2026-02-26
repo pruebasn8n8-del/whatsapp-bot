@@ -5,7 +5,7 @@ const logger = require('../utils/logger');
 
 const HEADERS = ['Clave', 'Valor', 'Actualizado'];
 
-let formatted = false;
+const _formatted = new Set(); // formatted per spreadsheetId
 
 async function getSheet() {
   const doc = await getDoc();
@@ -19,16 +19,20 @@ async function getSheet() {
     isNew = true;
   }
 
-  // Apply formatting once per session (on creation or first access)
-  if (!formatted) {
-    formatted = true;
-    await applyFormat(sheet, isNew);
+  // Apply formatting once per spreadsheet (best-effort, no abortar si falla)
+  if (!_formatted.has(doc.spreadsheetId)) {
+    _formatted.add(doc.spreadsheetId);
+    try {
+      await applyFormat(sheet, isNew, doc.spreadsheetId);
+    } catch (fmtErr) {
+      logger.warn('[ConfigManager] Formato no aplicado (no crítico):', fmtErr.message);
+    }
   }
 
   return sheet;
 }
 
-async function applyFormat(sheet, isNew) {
+async function applyFormat(sheet, isNew, spreadsheetId) {
   // Format header row
   await sheet.loadCells('A1:C1');
   for (let col = 0; col < HEADERS.length; col++) {
@@ -45,7 +49,6 @@ async function applyFormat(sheet, isNew) {
 
   // Set column widths and default cell format
   const sheetsApi = await getSheetsApi();
-  const spreadsheetId = config.google.spreadsheetId;
   const colWidths = [200, 200, 180]; // Clave, Valor, Actualizado
 
   const requests = colWidths.map((px, i) => ({
