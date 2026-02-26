@@ -80,15 +80,37 @@ function getInteractiveResponse(msg) {
  * @param {Array<{id: string, text: string, desc?: string}>} buttons - Lista de opciones
  */
 async function sendButtonMessage(sock, jid, title, footer, buttons) {
-  const lines = buttons.map((btn, i) => {
-    const num = `${i + 1}`;
-    const desc = btn.desc ? `\n      _${btn.desc}_` : '';
-    return `  *[ ${num} ]* ${btn.text}${desc}`;
-  });
+  // Botones nativos de WhatsApp Business (max 3 botones)
+  if (buttons.length <= 3) {
+    try {
+      const nativeButtons = buttons.map(btn => ({
+        name: 'quick_reply',
+        buttonParamsJson: JSON.stringify({
+          display_text: btn.text,
+          id: btn.id || btn.text,
+        }),
+      }));
+      const sent = await sock.sendMessage(jid, {
+        interactiveMessage: {
+          body: { text: PREFIX + title },
+          footer: { text: footer },
+          nativeFlowMessage: { buttons: nativeButtons },
+        },
+      });
+      return sent;
+    } catch (e) {
+      console.log('[messageUtils] Botones nativos fallaron, usando texto:', e.message?.substring(0, 60));
+    }
+  }
 
+  // Fallback texto formateado
+  const lines = buttons.map((btn, i) => {
+    const desc = btn.desc ? `\n      _${btn.desc}_` : '';
+    return `  *[ ${i + 1} ]* ${btn.text}${desc}`;
+  });
   const divider = '─'.repeat(25);
   const text = `${title}\n${divider}\n\n${lines.join('\n\n')}\n\n${divider}\n_${footer}_`;
-  await sock.sendMessage(jid, { text: PREFIX + text });
+  return sock.sendMessage(jid, { text: PREFIX + text });
 }
 
 /**
