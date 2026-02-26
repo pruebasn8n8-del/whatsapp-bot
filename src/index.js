@@ -25,9 +25,9 @@ const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
 const GroqService = require('../Groqbot/src/groqService');
-const { getDoc } = require('../Gastos/src/sheets/sheetsClient');
 const { setupRouter, getActiveBot } = require('./router');
 const { startScheduler } = require('../DailyBriefing/src/scheduler');
+const { startSalaryScheduler } = require('../Gastos/src/salaryScheduler');
 
 // ============================================
 // Validar configuracion
@@ -37,10 +37,7 @@ if (!process.env.GROQ_API_KEY) {
   process.exit(1);
 }
 
-if (!process.env.GOOGLE_SPREADSHEET_ID) {
-  console.error('Falta GOOGLE_SPREADSHEET_ID en .env');
-  process.exit(1);
-}
+// GOOGLE_SPREADSHEET_ID ya no es necesario - cada usuario tiene su propia hoja creada en el onboarding
 
 // ============================================
 // Inicializar servicios
@@ -235,6 +232,7 @@ async function connectWhatsApp() {
       console.log('  /miperfil - Cambiar personalidad (todos)\n');
 
       startScheduler(sock);
+      startSalaryScheduler(sock);
     }
   });
 
@@ -395,13 +393,7 @@ async function main() {
   // Verificar conectividad de red hacia WhatsApp
   await testNetworkConnectivity();
 
-  try {
-    await getDoc();
-    console.log('Conexion a Google Sheets verificada.');
-  } catch (err) {
-    console.error('Error conectando a Google Sheets:', err.message);
-    console.error('El bot de Gastos no funcionara, pero Groq IA si.');
-  }
+  // Google Sheets se conecta on-demand por usuario (cada uno tiene su propio spreadsheet)
 
   app.listen(PORT, () => {
     console.log(`Dashboard: http://localhost:${PORT}`);
