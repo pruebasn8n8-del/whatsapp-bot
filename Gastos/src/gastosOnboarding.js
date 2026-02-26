@@ -150,11 +150,21 @@ async function startGastosOnboarding(sock, jid) {
   await sock.sendMessage(jid, { text: PREFIX + msgGoals() });
 }
 
+function _normalizeData(raw) {
+  const d = { ...raw };
+  if (d.accounts && !Array.isArray(d.accounts)) d.accounts = [d.accounts];
+  if (d.crypto && !Array.isArray(d.crypto)) d.crypto = [d.crypto];
+  if (d.fx_holdings && !Array.isArray(d.fx_holdings)) d.fx_holdings = [d.fx_holdings];
+  if (d.goals && !Array.isArray(d.goals)) d.goals = [d.goals];
+  if (d.payday && !Array.isArray(d.payday)) d.payday = [d.payday];
+  return d;
+}
+
 async function handleGastosOnboardingStep(sock, jid, text, groqService) {
   const gastos = await getGastosData(jid);
   const step = gastos.onboarding_step;
   if (!step || step === 'complete') return false;
-  const data = gastos.onboarding_data || {};
+  const data = _normalizeData(gastos.onboarding_data || {});
 
   try {
     // ── Detector de correcciones mid-flow (excepto goals y confirm) ──
@@ -279,7 +289,7 @@ async function handleGastosOnboardingStep(sock, jid, text, groqService) {
 
 async function resendCurrentStep(sock, jid) {
   const gastos = await getGastosData(jid);
-  const msg = _getStepMsg(gastos.onboarding_step, gastos.onboarding_data || {});
+  const msg = _getStepMsg(gastos.onboarding_step, _normalizeData(gastos.onboarding_data || {}));
   if (msg) await sock.sendMessage(jid, { text: PREFIX + '↩️ Continuamos donde lo dejamos:\n\n' + msg });
 }
 
