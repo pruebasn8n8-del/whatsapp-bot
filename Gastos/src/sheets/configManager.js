@@ -199,9 +199,9 @@ async function writeInitialConfigLayout(data) {
         verticalAlignment: 'MIDDLE',
         ...extraFmt,
       };
-      if (fg) fmt.foregroundColor = fg;
-      if (isHeader || isSection) fmt.textFormat = { bold: true, foregroundColor: white };
-      if (isSubRow) fmt.textFormat = { foregroundColor: grayText };
+      if (fg) fmt.foregroundColorStyle = { rgbColor: fg };
+      if (isHeader || isSection) fmt.textFormat = { bold: true, foregroundColorStyle: { rgbColor: white } };
+      if (isSubRow) fmt.textFormat = { foregroundColorStyle: { rgbColor: grayText } };
       return fmt;
     }
 
@@ -235,9 +235,9 @@ async function writeInitialConfigLayout(data) {
       userEnteredValue: { stringValue: String(actualizado ?? '') },
       userEnteredFormat: fmtCell(actualizado, {
         horizontalAlignment: 'CENTER',
-        textFormat: isHeader ? { bold: true, foregroundColor: white }
-          : isSection ? { bold: true, foregroundColor: white }
-          : { fontSize: 9, foregroundColor: grayText },
+        textFormat: isHeader ? { bold: true, foregroundColorStyle: { rgbColor: white } }
+          : isSection ? { bold: true, foregroundColorStyle: { rgbColor: white } }
+          : { fontSize: 9, foregroundColorStyle: { rgbColor: grayText } },
       }),
     };
 

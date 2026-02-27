@@ -68,7 +68,7 @@ async function updateDashboard() {
   const currFmt = { numberFormat: { type: 'CURRENCY', pattern: '"$"#,##0' }, ...baseFmt };
   const pctFmt = { numberFormat: { type: 'PERCENT', pattern: '0%' }, ...baseFmt };
   const headerFmt = { backgroundColor: grayBg, textFormat: { bold: true }, ...baseFmt };
-  const titleFmt = { backgroundColor: titleBg, textFormat: { bold: true, fontSize: 16, foregroundColor: titleFg }, ...baseFmt };
+  const titleFmt = { backgroundColor: titleBg, textFormat: { bold: true, fontSize: 16, foregroundColorStyle: { rgbColor: titleFg } }, ...baseFmt };
   const sectionFmt = { textFormat: { bold: true, fontSize: 12 }, ...baseFmt };
   const finHeaderFmt = { backgroundColor: greenBg, textFormat: { bold: true }, ...baseFmt };
 
@@ -340,8 +340,8 @@ async function initResumenSheet(data) {
           userEnteredValue: { stringValue: text },
           userEnteredFormat: {
             backgroundColor: navyBg,
-            foregroundColor: white,
-            textFormat: { bold: true, fontSize: 16, foregroundColor: white },
+            foregroundColorStyle: { rgbColor: white },
+            textFormat: { bold: true, fontSize: 16, foregroundColorStyle: { rgbColor: white } },
             horizontalAlignment: 'CENTER',
             verticalAlignment: 'MIDDLE',
           },
@@ -371,8 +371,8 @@ async function initResumenSheet(data) {
           userEnteredValue: { stringValue: `${emoji} ${label}` },
           userEnteredFormat: {
             backgroundColor: bg,
-            foregroundColor: white,
-            textFormat: { bold: true, foregroundColor: white },
+            foregroundColorStyle: { rgbColor: white },
+            textFormat: { bold: true, foregroundColorStyle: { rgbColor: white } },
             horizontalAlignment: 'LEFT',
             verticalAlignment: 'MIDDLE',
           },
@@ -400,7 +400,7 @@ async function initResumenSheet(data) {
     if (bg) valueFmt.backgroundColor = bg;
     if (opts.bold) valueFmt.textFormat = { bold: true };
     if (opts.greenText) {
-      valueFmt.textFormat = { ...(valueFmt.textFormat || {}), bold: opts.bold || false, foregroundColor: boldGreenFg };
+      valueFmt.textFormat = { ...(valueFmt.textFormat || {}), bold: opts.bold || false, foregroundColorStyle: { rgbColor: boldGreenFg } };
     }
     if (opts.isNumber) {
       valueFmt.numberFormat = currFmt;
