@@ -106,8 +106,42 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
       return;
     }
 
+    // --- Command: help / command list ---
+    if (textLower === '/ayuda' || textLower === '/comandos' || textLower === 'ayuda' || textLower === 'comandos') {
+      const divider = '─'.repeat(25);
+      await _reply(sock, jid, msg,
+        `*📋 Comandos disponibles*\n${divider}\n\n` +
+        `*💸 Registrar gasto*\n` +
+        `  _Escribe cualquier gasto con monto_\n` +
+        `  Ej: "Almuerzo 15k" · "Netflix 50000"\n` +
+        `  Añade [mes] al final para otro mes\n` +
+        `  Ej: "Taxi 25k [enero]"\n\n` +
+        `*📊 Ver gastos*\n` +
+        `  ver gastos — últimos 10 de este mes\n` +
+        `  ver gastos [mes] — ej: ver gastos [enero]\n\n` +
+        `*✏️ Editar / borrar*\n` +
+        `  editar X — editar gasto #X de la lista\n` +
+        `  borrar X — eliminar gasto #X de la lista\n\n` +
+        `*📈 Resumen y saldos*\n` +
+        `  resumen — análisis financiero completo\n` +
+        `  cuentas — ver saldos y cuentas\n` +
+        `  config — ver configuración actual\n\n` +
+        `*⚙️ Configurar*\n` +
+        `  salario 5M — establecer salario mensual\n` +
+        `  saldo 2.5M — establecer saldo bancario\n` +
+        `  meta ahorro 1M — meta de ahorro mensual\n\n` +
+        `*🔄 Actualizar hojas*\n` +
+        `  /actualizar — regenera Configuración, Resumen y Ahorros\n\n` +
+        `*🚪 Salir*\n` +
+        `  /salir · /stop — desactivar bot de gastos\n` +
+        `  /resetgastos — reiniciar onboarding desde cero\n\n` +
+        `${divider}\n_Montos: 15k = 15.000 · 2.5M = 2.500.000_`
+      );
+      return;
+    }
+
     // --- Command: force dashboard + config + resumen update ---
-    if (textLower === 'actualizar' || textLower === 'update') {
+    if (textLower === '/actualizar' || textLower === '/update') {
       await _reply(sock, jid, msg, '⏳ Actualizando todas las hojas...');
       const errors = [];
       // Reformatear Config y Resumen con datos del perfil
@@ -156,12 +190,7 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
         `  Base de calculo:  ${base}\n` +
         `  Meta de Ahorro:  ${meta}\n\n` +
         `${divider}\n` +
-        `*Comandos:*\n` +
-        `  salario _5M_\n` +
-        `  saldo _2.5M_\n` +
-        `  meta ahorro _1M_\n` +
-        `  resumen  -  Analisis completo\n` +
-        `  /stop  -  Desactivar bot`
+        `Escribe */ayuda* para ver todos los comandos`
       );
       return;
     }

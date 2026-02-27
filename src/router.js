@@ -508,15 +508,9 @@ function setupRouter(sock, groqService) {
                   await sock.sendMessage(jid, {
                     text: PREFIX +
                       '*Control de Gastos activado*\n' + divider + '\n\n' +
-                      'Registra un gasto escribiendo:\n_Almuerzo 25k_\n\n' +
-                      '*Comandos principales:*\n' +
-                      '  ver gastos  -  Ver ultimos gastos\n' +
-                      '  ver gastos [enero]  -  Ver otro mes\n' +
-                      '  resumen  -  Resumen financiero\n' +
-                      '  config  -  Ver configuracion\n' +
-                      '  salario 5M  -  Configurar salario\n\n' +
+                      'Registra un gasto escribiendo:\n_Almuerzo 25k_ | _Uber 15.000_ | _Netflix 20k_\n\n' +
                       `📊 Tu hoja: ${gastosData.sheet_url}\n\n` +
-                      divider + '\n_Escribe /stop para desactivar_'
+                      divider + '\n_Escribe */ayuda* para ver todos los comandos_\n_/stop para desactivar_'
                   });
                 } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
                   activeBot = 'gastos_onboarding';
@@ -567,7 +561,7 @@ function setupRouter(sock, groqService) {
               activeBot = 'gastos';
               const divider = '─'.repeat(25);
               await sock.sendMessage(jid, {
-                text: PREFIX + `💰 *Control de Gastos activado*\n${divider}\n\nRegistra un gasto:\n_Almuerzo 25k_ | _Uber 15.000_ | _Netflix 20k_\n\n*Comandos:*\n  ver gastos  -  Ver últimos gastos\n  ver gastos [enero]  -  Ver otro mes\n  resumen  -  Análisis financiero\n  cuentas  -  Ver saldo de cuentas\n  config  -  Configuración\n\n📊 Tu hoja: ${gastosData.sheet_url}\n\n${divider}\n_Escribe /stop para desactivar_`
+                text: PREFIX + `💰 *Control de Gastos activado*\n${divider}\n\nRegistra un gasto:\n_Almuerzo 25k_ | _Uber 15.000_ | _Netflix 20k_\n\n📊 Tu hoja: ${gastosData.sheet_url}\n\n${divider}\n_Escribe */ayuda* para ver todos los comandos_\n_/stop para desactivar_`
               });
             } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
               activeBot = 'gastos_onboarding';
@@ -720,14 +714,9 @@ function setupRouter(sock, groqService) {
                 'Registra un gasto escribiendo lo que gastaste:',
                 '_"Almuerzo 25k"_ | _"Transporte 15.000"_ | _"Netflix 20k"_',
                 '',
-                '*Comandos útiles:*',
-                '  _ver gastos_ → últimos registros',
-                '  _resumen_ → análisis financiero',
-                '  _cuentas_ → estado de cuentas',
-                '  _meta ahorro 300k_ → cambiar meta',
-                '',
                 `📊 Tu hoja: ${gastosData.sheet_url || '(ver en config)'}`,
                 divider,
+                '_Escribe */ayuda* para ver todos los comandos_',
                 '_/salir → volver al asistente de IA_',
               ].join('\n'),
             });
