@@ -199,7 +199,6 @@ async function writeInitialConfigLayout(data) {
         verticalAlignment: 'MIDDLE',
         ...extraFmt,
       };
-      if (fg) fmt.foregroundColorStyle = { rgbColor: fg };
       if (isHeader || isSection) fmt.textFormat = { bold: true, foregroundColorStyle: { rgbColor: white } };
       if (isSubRow) fmt.textFormat = { foregroundColorStyle: { rgbColor: grayText } };
       return fmt;

@@ -340,7 +340,6 @@ async function initResumenSheet(data) {
           userEnteredValue: { stringValue: text },
           userEnteredFormat: {
             backgroundColor: navyBg,
-            foregroundColorStyle: { rgbColor: white },
             textFormat: { bold: true, fontSize: 16, foregroundColorStyle: { rgbColor: white } },
             horizontalAlignment: 'CENTER',
             verticalAlignment: 'MIDDLE',
@@ -371,7 +370,6 @@ async function initResumenSheet(data) {
           userEnteredValue: { stringValue: `${emoji} ${label}` },
           userEnteredFormat: {
             backgroundColor: bg,
-            foregroundColorStyle: { rgbColor: white },
             textFormat: { bold: true, foregroundColorStyle: { rgbColor: white } },
             horizontalAlignment: 'LEFT',
             verticalAlignment: 'MIDDLE',
