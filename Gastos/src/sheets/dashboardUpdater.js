@@ -15,7 +15,8 @@ function strCell(v, fmt) {
   return cell;
 }
 function numCell(v, fmt) {
-  const cell = { userEnteredValue: { numberValue: v } };
+  const safeV = (typeof v === 'number' && isFinite(v)) ? v : (parseFloat(v) || 0);
+  const cell = { userEnteredValue: { numberValue: safeV } };
   cell.userEnteredFormat = fmt ? { ...baseFmt, ...fmt } : { ...baseFmt };
   return cell;
 }
@@ -151,8 +152,8 @@ async function updateDashboard() {
     }
   }
 
-  const conservadorF = '=' + savParts.map(p => `${p.bCell}*${Math.round(p.rate * 100)}/100/2`).join('+');
-  const agresivoF = '=' + savParts.map(p => `${p.bCell}*${Math.round(p.rate * 100)}/100`).join('+');
+  const conservadorF = savParts.length ? '=' + savParts.map(p => `${p.bCell}*${Math.round(p.rate * 100)}/100/2`).join('+') : '=0';
+  const agresivoF = savParts.length ? '=' + savParts.map(p => `${p.bCell}*${Math.round(p.rate * 100)}/100`).join('+') : '=0';
 
   rows.push({ values: [strCell('Conservador'), formulaCell(conservadorF, currFmt)] }); r++;
   rows.push({ values: [strCell('Agresivo'), formulaCell(agresivoF, currFmt)] }); r++;

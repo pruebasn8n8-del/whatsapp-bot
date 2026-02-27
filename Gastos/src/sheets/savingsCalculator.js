@@ -13,7 +13,8 @@ function strCell(v, fmt) {
   return cell;
 }
 function numCell(v, fmt) {
-  const cell = { userEnteredValue: { numberValue: v } };
+  const safeV = (typeof v === 'number' && isFinite(v)) ? v : (parseFloat(v) || 0);
+  const cell = { userEnteredValue: { numberValue: safeV } };
   cell.userEnteredFormat = fmt ? { ...baseFmt, ...fmt } : { ...baseFmt };
   return cell;
 }
