@@ -382,6 +382,13 @@ async function _completeOnboarding(sock, jid, data, sheetId) {
       sheet_id: sheetId, sheet_url: sheetUrl, onboarding_step: 'complete', onboarding_data: {},
       config: { goals: data.goals || [], salary: data.salary || null, salary_frequency: data.salary_frequency || 'monthly', payday: data.payday || [], savings_goal: data.savings_goal || null, accounts: data.accounts || [], crypto: data.crypto || [], fx_holdings: data.fx_holdings || [] },
     });
+
+    // Formatear Config y Resumen con diseño profesional
+    const { writeInitialConfigLayout } = require('./sheets/configManager');
+    const { initResumenSheet } = require('./sheets/dashboardUpdater');
+    try { await writeInitialConfigLayout(data); } catch (e) { console.warn('[Onboarding] Config layout:', e.message); }
+    try { await initResumenSheet(data); } catch (e) { console.warn('[Onboarding] Resumen init:', e.message); }
+
     const divider = '─'.repeat(25);
     await sock.sendMessage(jid, {
       text: PREFIX + ['✅ *¡Tu perfil financiero está listo!*', divider, '', '📊 Tu hoja de cálculo personal:', `🔗 ${sheetUrl}`, '', '*Cómo registrar gastos:*', '  _"Almuerzo 25k"_ | _"Uber 15.000"_ | _"Netflix 20k"_', '  Para otro mes: _"Almuerzo 25k [enero]"_', '', '*Comandos útiles:*', '  _cuentas_ → ver saldo', '  _ver gastos_ → últimos registros', '  _resumen_ → análisis financiero', '  _/salir_ → volver al asistente de IA', divider].join('\n'),

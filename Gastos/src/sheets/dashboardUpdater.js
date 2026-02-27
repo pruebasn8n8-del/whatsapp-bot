@@ -1,5 +1,5 @@
 const { getDoc, getSheetsApi } = require('./sheetsClient');
-const { getMonthTabName } = require('../utils/dateUtils');
+const { getMonthTabName, now, getFormattedDate } = require('../utils/dateUtils');
 const { categories, defaultCategory } = require('../categories/categoryMap');
 const { writeSavingsTab } = require('./savingsCalculator');
 const { createCharts } = require('./chartManager');
@@ -35,7 +35,7 @@ function sumByCategoryFormula(t, labelCell) {
 async function updateDashboard() {
   const doc = await getDoc();
   const sheetsApi = await getSheetsApi();
-  const spreadsheetId = config.google.spreadsheetId;
+  const spreadsheetId = doc.spreadsheetId;
   const tabName = getMonthTabName();
 
   let resumenSheet = doc.sheetsByTitle[config.sheets.resumenTab];
@@ -285,4 +285,292 @@ async function updateDashboard() {
   }
 }
 
-module.exports = { updateDashboard };
+// ─────────────────────────────────────────────────────────────────
+// initResumenSheet: creates a beautiful initial Resumen sheet with
+// the user's financial profile. No expense data needed.
+// ─────────────────────────────────────────────────────────────────
+
+async function initResumenSheet(data) {
+  const doc = await getDoc();
+  const sheetsApi = await getSheetsApi();
+  const spreadsheetId = doc.spreadsheetId;
+  const tabName = getMonthTabName();
+  const resumenTitle = config.sheets.resumenTab;
+
+  // Ensure tab exists
+  let resumenSheet = doc.sheetsByTitle[resumenTitle];
+  if (!resumenSheet) {
+    resumenSheet = await doc.addSheet({ title: resumenTitle });
+  }
+
+  // Reload to get fresh sheetId
+  await doc.loadInfo();
+  resumenSheet = doc.sheetsByTitle[resumenTitle];
+  const sheetId = resumenSheet.sheetId;
+
+  // ── Color palette ──
+  const navyBg  = { red: 0.129, green: 0.188, blue: 0.310 }; // #21304F
+  const tealBg  = { red: 0.110, green: 0.439, blue: 0.502 }; // #1C7080
+  const greenBg = { red: 0.180, green: 0.490, blue: 0.322 }; // #2E7D52
+  const amberBg = { red: 0.776, green: 0.467, blue: 0.000 }; // #C67700
+  const white   = { red: 1, green: 1, blue: 1 };
+  const lightBlueBg = { red: 0.886, green: 0.937, blue: 0.984 }; // #E2EFFA
+  const boldGreenFg = { red: 0.110, green: 0.490, blue: 0.200 };
+
+  const currFmt = { type: 'CURRENCY', pattern: '"$"#,##0' };
+
+  const totalBalance = (data.accounts || []).reduce((s, a) => s + (a.balance || 0), 0);
+  const salary = data.salary || 0;
+  const savingsGoal = data.savings_goal || 0;
+  const disponible = salary - savingsGoal;
+
+  const goalLabels = {
+    control_gastos: 'Control de gastos',
+    ahorro: 'Ahorro',
+    metas: 'Metas financieras',
+    inversion: 'Inversión',
+    presupuesto: 'Presupuesto',
+  };
+
+  // ── Row builder helpers ──
+  function titleRowData(text) {
+    return {
+      values: [
+        {
+          userEnteredValue: { stringValue: text },
+          userEnteredFormat: {
+            backgroundColor: navyBg,
+            foregroundColor: white,
+            textFormat: { bold: true, fontSize: 16, foregroundColor: white },
+            horizontalAlignment: 'CENTER',
+            verticalAlignment: 'MIDDLE',
+          },
+        },
+        {
+          userEnteredFormat: { backgroundColor: navyBg, verticalAlignment: 'MIDDLE' },
+        },
+        {
+          userEnteredFormat: { backgroundColor: navyBg, verticalAlignment: 'MIDDLE' },
+        },
+      ],
+    };
+  }
+
+  function spacerRow() {
+    return { values: [
+      { userEnteredFormat: { verticalAlignment: 'MIDDLE' } },
+      { userEnteredFormat: { verticalAlignment: 'MIDDLE' } },
+      { userEnteredFormat: { verticalAlignment: 'MIDDLE' } },
+    ] };
+  }
+
+  function sectionRow(emoji, label, bg) {
+    return {
+      values: [
+        {
+          userEnteredValue: { stringValue: `${emoji} ${label}` },
+          userEnteredFormat: {
+            backgroundColor: bg,
+            foregroundColor: white,
+            textFormat: { bold: true, foregroundColor: white },
+            horizontalAlignment: 'LEFT',
+            verticalAlignment: 'MIDDLE',
+          },
+        },
+        { userEnteredFormat: { backgroundColor: bg, verticalAlignment: 'MIDDLE' } },
+        { userEnteredFormat: { backgroundColor: bg, verticalAlignment: 'MIDDLE' } },
+      ],
+    };
+  }
+
+  function dataRow(label, value, opts = {}) {
+    // opts: { isNumber, bold, greenText, rowBg, lightBlueBg: bool }
+    const bg = opts.rowBg || null;
+    const labelFmt = {
+      verticalAlignment: 'MIDDLE',
+      horizontalAlignment: 'LEFT',
+    };
+    if (bg) labelFmt.backgroundColor = bg;
+    if (opts.bold) labelFmt.textFormat = { bold: true };
+
+    const valueFmt = {
+      verticalAlignment: 'MIDDLE',
+      horizontalAlignment: 'RIGHT',
+    };
+    if (bg) valueFmt.backgroundColor = bg;
+    if (opts.bold) valueFmt.textFormat = { bold: true };
+    if (opts.greenText) {
+      valueFmt.textFormat = { ...(valueFmt.textFormat || {}), bold: opts.bold || false, foregroundColor: boldGreenFg };
+    }
+    if (opts.isNumber) {
+      valueFmt.numberFormat = currFmt;
+    }
+
+    const labelCell = {
+      userEnteredValue: { stringValue: String(label) },
+      userEnteredFormat: labelFmt,
+    };
+
+    let valueCell;
+    if (opts.isNumber && typeof value === 'number') {
+      valueCell = { userEnteredValue: { numberValue: value }, userEnteredFormat: valueFmt };
+    } else {
+      valueCell = { userEnteredValue: { stringValue: String(value ?? '') }, userEnteredFormat: valueFmt };
+    }
+
+    const extraFmt = { verticalAlignment: 'MIDDLE' };
+    if (bg) extraFmt.backgroundColor = bg;
+
+    return { values: [labelCell, valueCell, { userEnteredFormat: extraFmt }] };
+  }
+
+  // ── Build rows ──
+  const rows = [];
+
+  // Row 0: title (will be merged A-C)
+  rows.push(titleRowData(`💰 Finanzas Personales — ${tabName}`));
+
+  // Spacer
+  rows.push(spacerRow());
+
+  // PLAN MENSUAL section
+  rows.push(sectionRow('📊', 'PLAN MENSUAL', tealBg));
+  rows.push(dataRow('Ingreso mensual', salary, { isNumber: true }));
+  rows.push(dataRow('(-) Meta de ahorro', savingsGoal, { isNumber: true, rowBg: lightBlueBg }));
+  rows.push(dataRow('(=) Disponible para gastos', disponible, {
+    isNumber: true, bold: true, greenText: disponible >= 0,
+  }));
+  rows.push(spacerRow());
+
+  // SALDOS ACTUALES section
+  rows.push(sectionRow('🏦', 'SALDOS ACTUALES', tealBg));
+  let acctToggle = false;
+  for (const acc of (data.accounts || [])) {
+    rows.push(dataRow(acc.name, acc.balance || 0, {
+      isNumber: true,
+      rowBg: acctToggle ? lightBlueBg : null,
+    }));
+    acctToggle = !acctToggle;
+  }
+  rows.push(dataRow('TOTAL', totalBalance, { isNumber: true, bold: true }));
+  rows.push(spacerRow());
+
+  // GASTOS DEL MES section
+  rows.push(sectionRow('📈', 'GASTOS DEL MES', greenBg));
+  rows.push(dataRow('Total gastado', 0, { isNumber: true }));
+  rows.push(dataRow('Disponible restante', salary, { isNumber: true }));
+  rows.push(dataRow('Registros este mes', 0));
+  rows.push(spacerRow());
+
+  // OBJETIVOS section (if any)
+  if (data.goals && data.goals.length > 0) {
+    rows.push(sectionRow('🎯', 'MIS OBJETIVOS', navyBg));
+    for (const g of data.goals) {
+      const label = '  • ' + (goalLabels[g] || g);
+      rows.push(dataRow(label, '✓'));
+    }
+    rows.push(spacerRow());
+  }
+
+  // CRIPTOMONEDAS section (if any)
+  if (data.crypto && data.crypto.length > 0) {
+    rows.push(sectionRow('₿', 'CRIPTOMONEDAS', amberBg));
+    for (const c of data.crypto) {
+      rows.push(dataRow(c.symbol, c.amount));
+    }
+    rows.push(spacerRow());
+  }
+
+  // ── batchUpdate: clear + write + format + merge title ──
+  const requests = [
+    // Clear existing content
+    {
+      updateCells: {
+        range: { sheetId, startRowIndex: 0, startColumnIndex: 0 },
+        fields: 'userEnteredValue,userEnteredFormat',
+      },
+    },
+    // Write all rows
+    {
+      updateCells: {
+        range: { sheetId, startRowIndex: 0, startColumnIndex: 0 },
+        rows,
+        fields: 'userEnteredValue,userEnteredFormat',
+      },
+    },
+    // Merge title row A-C
+    {
+      mergeCells: {
+        range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 3 },
+        mergeType: 'MERGE_ALL',
+      },
+    },
+    // Column widths: A=260, B=185, C=90
+    {
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 },
+        properties: { pixelSize: 260 },
+        fields: 'pixelSize',
+      },
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 },
+        properties: { pixelSize: 185 },
+        fields: 'pixelSize',
+      },
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: 3 },
+        properties: { pixelSize: 90 },
+        fields: 'pixelSize',
+      },
+    },
+    // All rows 30px
+    {
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: rows.length },
+        properties: { pixelSize: 30 },
+        fields: 'pixelSize',
+      },
+    },
+    // Title row taller: 52px
+    {
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: 1 },
+        properties: { pixelSize: 52 },
+        fields: 'pixelSize',
+      },
+    },
+    // Freeze title row
+    {
+      updateSheetProperties: {
+        properties: {
+          sheetId,
+          gridProperties: { frozenRowCount: 1 },
+        },
+        fields: 'gridProperties.frozenRowCount',
+      },
+    },
+    // Move Resumen to index 0 (first tab)
+    {
+      updateSheetProperties: {
+        properties: {
+          sheetId,
+          index: 0,
+        },
+        fields: 'index',
+      },
+    },
+  ];
+
+  await sheetsApi.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests },
+  });
+
+  logger.info('[DashboardUpdater] Resumen inicial profesional escrito correctamente');
+}
+
+module.exports = { updateDashboard, initResumenSheet };
