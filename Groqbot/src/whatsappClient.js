@@ -32,10 +32,10 @@ const _pendingRole = new Map(); // chatId -> { options: [...keys], timestamp }
 const _priceAlerts = new Map(); // chatId -> [{ coin, condition, target, createdAt }]
 const _pendingClearConfirm = new Map(); // chatId -> { timestamp }
 const _cleanupPromptSent = new Map(); // chatId -> timestamp
+const _sessionStartTime = new Map(); // chatId -> timestamp del primer mensaje de la sesion
 const _chatMessageKeys = new Map(); // chatId -> [{ key, ts }] mensajes enviados por el bot
 const SELECTION_TIMEOUT = 60 * 1000;
-const USER_MSG_WARN_THRESHOLD = 10; // Sugerir limpieza al llegar a 10 mensajes del usuario
-const CLEANUP_PROMPT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutos entre prompts de limpieza
+const CLEANUP_REMIND_INTERVAL_MS = 5 * 60 * 1000; // recordatorio cada 5 minutos
 const MAX_TRACKED_MSGS = 80; // Maximo de keys a recordar por chat
 
 // Import lazy de contactsDb (puede no estar disponible si falta Supabase)
@@ -414,9 +414,42 @@ async function _smartClearHistory(sock, jid, chatId, groqService) {
   // Borrar mensajes del chat y luego limpiar historial
   groqService.clearHistory(chatId);
   _cleanupPromptSent.delete(chatId);
+  _sessionStartTime.delete(chatId);
   await _deleteChatMessages(sock, jid);
 
   await _sendText(sock, jid, memoryMsg || "Chat limpiado. Puedes seguir hablando.");
+}
+
+const _WA_CLEAR_INSTRUCTIONS =
+  '📋 *Cómo vaciar el chat completo en WhatsApp:*\n\n' +
+  '1. Toca los *tres puntos* ⋮ arriba a la derecha\n' +
+  '2. Toca *Más*\n' +
+  '3. Toca *Vaciar chat*\n\n' +
+  '_Esto elimina todos los mensajes visibles (tuyos y del bot) del dispositivo.\n' +
+  'Para limpiar solo el historial del bot usa /limpiar._';
+
+async function _sendClearReminder(sock, jid, groqService, chatId) {
+  const history = groqService.getHistory(chatId);
+  const userMsgs = history.filter(m => m.role === 'user').length;
+  const sessionMs = Date.now() - (_sessionStartTime.get(chatId) || Date.now());
+  const mins = Math.max(1, Math.round(sessionMs / 60000));
+  const sent = await sendListMessage(sock, jid,
+    `⏱️ *Recordatorio — ${mins} min de conversación*\n` +
+    `Historial actual: *${userMsgs}* mensajes del usuario.\n\n` +
+    `Limpiar periódicamente mejora la calidad de las respuestas.`,
+    'Escribe el número o selecciona una opción',
+    'Ver opciones',
+    [{
+      title: 'Gestionar historial',
+      rows: [
+        { id: 'limpiar_si',            title: '💾 Guardar y continuar',           description: 'Guarda lo importante en memoria y limpia el historial' },
+        { id: 'limpiar_reset',         title: '🗑️ Limpiar sin guardar',           description: 'Borra el historial del bot sin guardar memoria' },
+        { id: 'limpiar_no',            title: '❌ Continuar hablando',             description: 'Ignorar este aviso por 5 minutos más' },
+        { id: 'limpiar_instrucciones', title: '📋 Cómo vaciar el chat en WhatsApp', description: 'Instrucciones para borrar todos los mensajes del dispositivo' },
+      ],
+    }]
+  );
+  if (sent) _trackSentMessage(jid, sent);
 }
 
 /**
@@ -468,6 +501,11 @@ async function handleGroqMessage(msg, sock, groqService) {
 
   const chatId = jid;
   const chatVoiceMode = _voiceModes.get(chatId) || false;
+
+  // Registrar inicio de sesion si es el primer mensaje
+  if (!_sessionStartTime.has(chatId)) {
+    _sessionStartTime.set(chatId, Date.now());
+  }
 
   let typingInterval = null;
 
@@ -626,9 +664,24 @@ async function handleGroqMessage(msg, sock, groqService) {
           await _smartClearHistory(sock, jid, chatId, groqService);
           return;
         }
+        if (interactive.id === "limpiar_reset") {
+          _pendingClearConfirm.delete(chatId);
+          groqService.clearHistory(chatId);
+          _cleanupPromptSent.delete(chatId);
+          _sessionStartTime.delete(chatId);
+          await _sendText(sock, jid, "Historial del bot limpiado.\n\nLa memoria guardada se mantiene. Puedes seguir hablando.");
+          return;
+        }
         if (interactive.id === "limpiar_no") {
           _pendingClearConfirm.delete(chatId);
-          await _sendText(sock, jid, "Entendido, el chat continua.");
+          _cleanupPromptSent.set(chatId, Date.now()); // reinicia el cooldown
+          await _sendText(sock, jid, "Entendido, te avisaré en 5 minutos.");
+          return;
+        }
+        if (interactive.id === "limpiar_instrucciones") {
+          _pendingClearConfirm.delete(chatId);
+          _cleanupPromptSent.set(chatId, Date.now());
+          await _sendText(sock, jid, _WA_CLEAR_INSTRUCTIONS);
           return;
         }
         // Seleccion de modelo
@@ -667,12 +720,21 @@ async function handleGroqMessage(msg, sock, groqService) {
       if (!isNaN(num) && cmd === String(num)) {
         // Pendiente de confirmacion de limpieza
         const pendingClear = _pendingClearConfirm.get(chatId);
-        if (pendingClear && (num === 1 || num === 2)) {
+        if (pendingClear && num >= 1 && num <= 4) {
           _pendingClearConfirm.delete(chatId);
           if (num === 1) {
             await _smartClearHistory(sock, jid, chatId, groqService);
+          } else if (num === 2) {
+            groqService.clearHistory(chatId);
+            _cleanupPromptSent.delete(chatId);
+            _sessionStartTime.delete(chatId);
+            await _sendText(sock, jid, "Historial del bot limpiado sin guardar memoria.");
+          } else if (num === 3) {
+            _cleanupPromptSent.set(chatId, Date.now());
+            await _sendText(sock, jid, "Entendido, te avisaré en 5 minutos.");
           } else {
-            await _sendText(sock, jid, "Entendido, el chat continua.");
+            _cleanupPromptSent.set(chatId, Date.now());
+            await _sendText(sock, jid, _WA_CLEAR_INSTRUCTIONS);
           }
           return;
         }
@@ -1247,24 +1309,18 @@ async function handleGroqMessage(msg, sock, groqService) {
 
     console.log("[Groq] Respuesta enviada" + ((chatVoiceMode || isVoice) ? " (voz)" : " (texto)"));
 
-    // ========== DETECCION DE CHAT EXTENSO (10 mensajes del usuario) ==========
-    const history = groqService.getHistory(chatId);
-    const userMsgCount = history.filter(m => m.role === 'user').length;
-    if (userMsgCount >= USER_MSG_WARN_THRESHOLD && !_pendingClearConfirm.has(chatId)) {
-      const lastPrompt = _cleanupPromptSent.get(chatId) || 0;
-      if (Date.now() - lastPrompt > CLEANUP_PROMPT_COOLDOWN_MS) {
-        _cleanupPromptSent.set(chatId, Date.now());
-        _pendingClearConfirm.set(chatId, { timestamp: Date.now() });
-        const sentBtn = await sendButtonMessage(sock, jid,
-          "Llevamos " + userMsgCount + " mensajes\n\nLimpiar borra el chat y guarda lo importante en mi memoria.",
-          "Usa /limpiar cuando quieras",
-          [
-            { id: "limpiar_si", text: "Limpiar y guardar memoria", desc: "Borra el chat y guarda lo importante" },
-            { id: "limpiar_no", text: "Seguir hablando", desc: "Mantener el chat como esta" },
-          ]
-        );
-        if (sentBtn) _trackSentMessage(jid, sentBtn);
-      }
+    // ========== RECORDATORIO CADA 5 MINUTOS PARA LIMPIAR CHAT ==========
+    const sessionStart = _sessionStartTime.get(chatId) || Date.now();
+    const lastPrompt = _cleanupPromptSent.get(chatId) || 0;
+    if (
+      (Date.now() - sessionStart >= CLEANUP_REMIND_INTERVAL_MS) &&
+      (Date.now() - lastPrompt >= CLEANUP_REMIND_INTERVAL_MS) &&
+      !_pendingClearConfirm.has(chatId)
+    ) {
+      _cleanupPromptSent.set(chatId, Date.now());
+      _pendingClearConfirm.set(chatId, { timestamp: Date.now() });
+      const sentBtn = await _sendClearReminder(sock, jid, groqService, chatId);
+      if (sentBtn) _trackSentMessage(jid, sentBtn);
     }
 
   } catch (error) {

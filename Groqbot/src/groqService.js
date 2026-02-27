@@ -88,6 +88,8 @@ DESPLIEGUE — Koyeb:
   - Variables de entorno configuradas directamente en el dashboard de Koyeb
   - Keep-alive: el bot se hace ping a si mismo cada 10 min para no dormir
   - Health check: GET /health (Express)
+  - UptimeRobot: monitoreo externo que hace ping al endpoint /health cada 5 min
+    para mantener el servicio activo y recibir alertas si cae
 
 REPOSITORIO Y CONTROL DE VERSIONES:
   - Git con dos remotos:
