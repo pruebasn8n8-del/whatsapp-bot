@@ -372,7 +372,7 @@ async function initResumenSheet(data) {
           userEnteredFormat: {
             backgroundColor: bg,
             textFormat: { bold: true, foregroundColorStyle: { rgbColor: white } },
-            horizontalAlignment: 'LEFT',
+            horizontalAlignment: 'CENTER',
             verticalAlignment: 'MIDDLE',
           },
         },
@@ -387,14 +387,14 @@ async function initResumenSheet(data) {
     const bg = opts.rowBg || null;
     const labelFmt = {
       verticalAlignment: 'MIDDLE',
-      horizontalAlignment: 'LEFT',
+      horizontalAlignment: 'CENTER',
     };
     if (bg) labelFmt.backgroundColor = bg;
     if (opts.bold) labelFmt.textFormat = { bold: true };
 
     const valueFmt = {
       verticalAlignment: 'MIDDLE',
-      horizontalAlignment: 'RIGHT',
+      horizontalAlignment: 'CENTER',
     };
     if (bg) valueFmt.backgroundColor = bg;
     if (opts.bold) valueFmt.textFormat = { bold: true };
@@ -560,6 +560,14 @@ async function initResumenSheet(data) {
           index: 0,
         },
         fields: 'index',
+      },
+    },
+    // Force CENTER/MIDDLE on all cells
+    {
+      repeatCell: {
+        range: { sheetId, startRowIndex: 0, endRowIndex: rows.length + 5, startColumnIndex: 0, endColumnIndex: 3 },
+        cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE' } },
+        fields: 'userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment',
       },
     },
   ];

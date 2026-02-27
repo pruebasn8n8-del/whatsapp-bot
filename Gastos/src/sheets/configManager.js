@@ -207,7 +207,7 @@ async function writeInitialConfigLayout(data) {
     // Clave cell
     const claveCell = {
       userEnteredValue: { stringValue: String(clave ?? '') },
-      userEnteredFormat: fmtCell(clave, { horizontalAlignment: 'LEFT' }),
+      userEnteredFormat: fmtCell(clave, { horizontalAlignment: 'CENTER' }),
     };
 
     // Valor cell
@@ -216,7 +216,7 @@ async function writeInitialConfigLayout(data) {
       valorCell = {
         userEnteredValue: { numberValue: valor },
         userEnteredFormat: fmtCell(valor, {
-          horizontalAlignment: 'RIGHT',
+          horizontalAlignment: 'CENTER',
           numberFormat: { type: 'CURRENCY', pattern: '"$"#,##0' },
         }),
       };
@@ -224,7 +224,7 @@ async function writeInitialConfigLayout(data) {
       valorCell = {
         userEnteredValue: { stringValue: String(valor ?? '') },
         userEnteredFormat: fmtCell(valor, {
-          horizontalAlignment: isSection || isHeader ? 'CENTER' : 'LEFT',
+          horizontalAlignment: 'CENTER',
         }),
       };
     }
@@ -402,6 +402,14 @@ async function writeInitialConfigLayout(data) {
           gridProperties: { frozenRowCount: 1 },
         },
         fields: 'gridProperties.frozenRowCount',
+      },
+    },
+    // 7. Force CENTER/MIDDLE on all cells
+    {
+      repeatCell: {
+        range: { sheetId, startRowIndex: 0, endRowIndex: rows.length + 5, startColumnIndex: 0, endColumnIndex: 3 },
+        cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE' } },
+        fields: 'userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment',
       },
     },
   ];
