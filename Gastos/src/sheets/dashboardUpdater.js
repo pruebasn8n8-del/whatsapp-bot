@@ -241,9 +241,9 @@ async function updateDashboard() {
           repeatCell: {
             range: { sheetId: resumenSheetId, startRowIndex: 0, endRowIndex: 100, startColumnIndex: 0, endColumnIndex: 3 },
             cell: {
-              userEnteredFormat: { horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE' },
+              userEnteredFormat: { horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' },
             },
-            fields: 'userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment',
+            fields: 'userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy',
           },
         },
       ],
@@ -562,12 +562,12 @@ async function initResumenSheet(data) {
         fields: 'index',
       },
     },
-    // Force CENTER/MIDDLE on all cells
+    // Force CENTER/MIDDLE + WRAP on all cells
     {
       repeatCell: {
         range: { sheetId, startRowIndex: 0, endRowIndex: rows.length + 5, startColumnIndex: 0, endColumnIndex: 3 },
-        cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE' } },
-        fields: 'userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment',
+        cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' } },
+        fields: 'userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy',
       },
     },
   ];

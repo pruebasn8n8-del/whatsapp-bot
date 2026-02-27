@@ -187,7 +187,7 @@ async function writeSavingsTab() {
             fields: 'pixelSize',
           },
         },
-        // Force center alignment on ALL cells in the Ahorros sheet
+        // Force center alignment + wrap on ALL cells in the Ahorros sheet
         {
           repeatCell: {
             range: { sheetId, startRowIndex: 0, endRowIndex: rows.length, startColumnIndex: 0, endColumnIndex: 5 },
@@ -195,9 +195,10 @@ async function writeSavingsTab() {
               userEnteredFormat: {
                 horizontalAlignment: 'CENTER',
                 verticalAlignment: 'MIDDLE',
+                wrapStrategy: 'WRAP',
               },
             },
-            fields: 'userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment',
+            fields: 'userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy',
           },
         },
       ],

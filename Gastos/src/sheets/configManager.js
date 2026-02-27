@@ -356,41 +356,41 @@ async function writeInitialConfigLayout(data) {
         fields: 'userEnteredValue,userEnteredFormat',
       },
     },
-    // 3. Column widths: A=215, B=175, C=120
+    // 3. Column widths: A=200, B=260, C=130
     {
       updateDimensionProperties: {
         range: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 },
-        properties: { pixelSize: 215 },
+        properties: { pixelSize: 200 },
         fields: 'pixelSize',
       },
     },
     {
       updateDimensionProperties: {
         range: { sheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 },
-        properties: { pixelSize: 175 },
+        properties: { pixelSize: 260 },
         fields: 'pixelSize',
       },
     },
     {
       updateDimensionProperties: {
         range: { sheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: 3 },
-        properties: { pixelSize: 120 },
+        properties: { pixelSize: 130 },
         fields: 'pixelSize',
       },
     },
-    // 4. Default row height 28px for all rows
+    // 4. Default row height 34px for all rows
     {
       updateDimensionProperties: {
         range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: rows.length },
-        properties: { pixelSize: 28 },
+        properties: { pixelSize: 34 },
         fields: 'pixelSize',
       },
     },
-    // 5. Header row taller: 36px
+    // 5. Header row taller: 42px
     {
       updateDimensionProperties: {
         range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: 1 },
-        properties: { pixelSize: 36 },
+        properties: { pixelSize: 42 },
         fields: 'pixelSize',
       },
     },
@@ -404,12 +404,12 @@ async function writeInitialConfigLayout(data) {
         fields: 'gridProperties.frozenRowCount',
       },
     },
-    // 7. Force CENTER/MIDDLE on all cells
+    // 7. Force CENTER/MIDDLE + WRAP on all cells
     {
       repeatCell: {
         range: { sheetId, startRowIndex: 0, endRowIndex: rows.length + 5, startColumnIndex: 0, endColumnIndex: 3 },
-        cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE' } },
-        fields: 'userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment',
+        cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' } },
+        fields: 'userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy',
       },
     },
   ];
