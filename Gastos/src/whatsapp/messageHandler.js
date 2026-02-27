@@ -106,14 +106,28 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
       return;
     }
 
-    // --- Command: force dashboard update ---
+    // --- Command: force dashboard + config + resumen update ---
     if (textLower === 'actualizar' || textLower === 'update') {
-      await _reply(sock, jid, msg, 'Actualizando dashboard y hojas...');
+      await _reply(sock, jid, msg, '⏳ Actualizando todas las hojas...');
+      const errors = [];
+      // Reformatear Config y Resumen con datos del perfil
       try {
-        await updateDashboard();
-        await _reply(sock, jid, msg, 'Dashboard, Ahorros y graficos actualizados correctamente.');
-      } catch (err) {
-        await _reply(sock, jid, msg, `Error al actualizar: ${err.message}`);
+        const { getGastosData } = require('../../../src/gastosDb');
+        const { writeInitialConfigLayout } = require('../sheets/configManager');
+        const { initResumenSheet } = require('../sheets/dashboardUpdater');
+        const { writeSavingsTab } = require('../sheets/savingsCalculator');
+        const gastosData = await getGastosData(jid);
+        const data = gastosData.config || {};
+        await writeInitialConfigLayout(data);
+        await initResumenSheet(data);
+        await writeSavingsTab();
+      } catch (e) { errors.push('perfil: ' + e.message.substring(0, 60)); }
+      // Dashboard con gastos del mes
+      try { await updateDashboard(); } catch (e) { errors.push('dashboard: ' + e.message.substring(0, 60)); }
+      if (errors.length) {
+        await _reply(sock, jid, msg, `✅ Hojas actualizadas (con algunos avisos):\n${errors.map(e => '• ' + e).join('\n')}`);
+      } else {
+        await _reply(sock, jid, msg, '✅ Configuración, Resumen, Ahorros y Dashboard actualizados.');
       }
       return;
     }

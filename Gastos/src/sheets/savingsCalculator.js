@@ -26,7 +26,7 @@ function formulaCell(f, fmt) {
 async function writeSavingsTab() {
   const doc = await getDoc();
   const sheetsApi = await getSheetsApi();
-  const spreadsheetId = config.google.spreadsheetId;
+  const spreadsheetId = doc.spreadsheetId;
   const tabName = getMonthTabName();
   const t = `'${tabName}'`;
 
