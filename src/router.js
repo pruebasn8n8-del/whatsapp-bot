@@ -115,6 +115,34 @@ function setupRouter(sock, groqService) {
           continue;
         }
 
+        // /actualizar - regenerar hojas de gastos (funciona desde cualquier modo)
+        if (textLower === '/actualizar') {
+          const gastosData = await getGastosData(jid);
+          if (!gastosData.sheet_id || gastosData.onboarding_step !== 'complete') {
+            await sock.sendMessage(jid, { text: PREFIX + 'No tienes gastos configurados. Escribe /gastos para empezar.' });
+            continue;
+          }
+          setCurrentSpreadsheetId(gastosData.sheet_id);
+          await sock.sendMessage(jid, { text: PREFIX + '⏳ Actualizando todas las hojas...' });
+          const errors = [];
+          try {
+            const { writeInitialConfigLayout } = require('../Gastos/src/sheets/configManager');
+            const { initResumenSheet, updateDashboard } = require('../Gastos/src/sheets/dashboardUpdater');
+            const { writeSavingsTab } = require('../Gastos/src/sheets/savingsCalculator');
+            const data = gastosData.config || {};
+            await writeInitialConfigLayout(data);
+            await initResumenSheet(data);
+            await writeSavingsTab();
+            await updateDashboard();
+          } catch (e) { errors.push(e.message.substring(0, 80)); }
+          if (errors.length) {
+            await sock.sendMessage(jid, { text: PREFIX + `✅ Hojas actualizadas (con avisos):\n${errors.map(e => '• ' + e).join('\n')}` });
+          } else {
+            await sock.sendMessage(jid, { text: PREFIX + '✅ Configuración, Resumen, Ahorros y Dashboard actualizados.' });
+          }
+          continue;
+        }
+
         // /noticias - obtener noticias ahora (con preferencias del usuario)
         if (textLower === '/noticias') {
           try {
