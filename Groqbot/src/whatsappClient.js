@@ -61,6 +61,24 @@ function _getWebSearch() {
   return _webSearch;
 }
 
+// Lazy import de detección de intención natural
+let _detectIntent;
+function _getDetectIntent() {
+  if (_detectIntent === undefined) {
+    try { _detectIntent = require('./naturalIntent').detectNaturalIntent; } catch (_) { _detectIntent = null; }
+  }
+  return _detectIntent;
+}
+
+// Lazy import de generación de PDF
+let _pdfSvc;
+function _getPdfSvc() {
+  if (_pdfSvc === undefined) {
+    try { _pdfSvc = require('./pdfService'); } catch (_) { _pdfSvc = null; }
+  }
+  return _pdfSvc;
+}
+
 // Roles predefinidos para /role
 const PRESET_ROLES = {
   traductor: "Eres un traductor profesional. Traduce entre espanol e ingles. Si te escriben en espanol, traduce al ingles. Si te escriben en ingles, traduce al espanol. Solo da la traduccion sin explicaciones adicionales.",
@@ -92,6 +110,17 @@ async function _convertToWebpSticker(buffer) {
   } finally {
     _cleanupFiles(inputPath, outputPath);
   }
+}
+
+/**
+ * Genera un código QR como imagen PNG (free API, sin key).
+ * https://api.qrserver.com/v1/create-qr-code/
+ */
+async function _generateQrCode(data) {
+  const url = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(data)}&format=png&margin=10`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error('QR API error: ' + res.status);
+  return Buffer.from(await res.arrayBuffer());
 }
 
 // ============================================
@@ -817,42 +846,44 @@ async function handleGroqMessage(msg, sock, groqService) {
           "🤖 *Cortana — Asistente IA*",
           divider,
           "",
-          "Envíame *texto*, *audio* 🎙️, *imagen* 🖼️, *documento* 📄 o *URL* 🔗",
-          "Razonamiento profundo automático en preguntas complejas.",
+          "Habla *naturalmente* — no necesitas comandos para la mayoría de cosas.",
+          "Envíame texto, audio 🎙️, imagen 🖼️, documento 📄 o URL 🔗.",
           "",
-          "💬 *Conversación*",
-          "  /modelo  — Cambiar modelo IA",
-          "  /voz  — Modo respuesta por voz",
-          "  /role  — Cambiar personalidad o modo",
-          "  /resumen  — Resumen de la conversación",
-          "  /limpiar  — Limpiar + guardar memoria",
-          "  /reset  — Reiniciar historial",
-          "  /exportar  — Descargar conversación (.txt)",
-          "  /stats  — Ver estadísticas de uso",
+          "💬 *Conversación natural*",
+          "  «Recuérdame en 2h que llame a mamá»",
+          "  «Activa la voz» / «Desactiva la voz»",
+          "  «Actúa como chef» / «Modo programador»",
+          "  «Usa el modelo más potente»",
+          "  «Mándame un gif de gatos»",
+          "  /modelo  /voz  /role  /resumen  /limpiar  /reset  /exportar  /stats",
           "",
           "🔍 *Búsqueda y datos en tiempo real*",
+          "  Clima, sismos, festivos — automático al preguntar",
           "  /buscar _consulta_  — Búsqueda web explícita",
           "  /clima _ciudad_  — Clima + pronóstico 3 días",
-          "  URLs  — Leo y analizo páginas automáticamente",
-          "  Reply  — Cito mensajes para dar contexto",
+          "  URLs  — Leo y analizo páginas",
           "  Docs  — Analizo PDF, TXT, CSV",
-          "  Datos auto: clima, sismos, festivos, países, divisas",
           "",
-          "⏰ *Recordatorios*",
-          "  /recordar _2h Llamar a mamá_  — Crear",
-          "  /recordar _30m Reunión_  — Crear",
-          "  /recordatorios  — Ver activos",
+          "⏰ *Recordatorios (lenguaje natural)*",
+          "  «Recuérdame en 30 min de la reunión»",
+          "  «Avísame en 2 horas que tengo llamada»",
+          "  «Ponme un recordatorio en 1 día»",
+          "  «Mis recordatorios»  |  /recordar  /recordatorios",
+          "",
+          "📄 *Documentos y códigos*",
+          "  «Crea un PDF sobre inteligencia artificial»",
+          "  «Genera un informe de marketing digital»",
+          "  «Genera un QR de https://ejemplo.com»",
+          "  «Crea un QR con mi número de teléfono»",
           "",
           "💰 *Precios crypto*",
           "  /dolar  — TRM Colombia hoy",
-          "  /btc  /eth  — Bitcoin / Ethereum",
-          "  /crypto _moneda_  — Cualquier crypto",
-          "  /alerta _btc > 100000_  — Crear alerta",
-          "  /alertas  — Ver y borrar alertas",
+          "  /btc  /eth  /crypto _moneda_  — Precios",
+          "  /alerta _btc > 100000_  |  /alertas",
           "",
           "🎨 *Multimedia*",
           "  /sticker  — Imagen citada → sticker WebP",
-          "  /gif _búsqueda_  — Buscar y enviar GIF",
+          "  «Mándame un gif de X»  |  /gif _búsqueda_",
           "",
           divider,
           `Modelo: _${modelName}_  |  Voz: ${voiceActive ? "*ON*" : "off"}  |  Rol: ${hasCustomRole ? "*personalizado*" : "defecto"}`,
@@ -1347,6 +1378,200 @@ async function handleGroqMessage(msg, sock, groqService) {
         return;
       }
     }
+
+    // ========== INTENCIÓN EN LENGUAJE NATURAL ==========
+    // Intercepta acciones comunes sin necesidad de /comandos.
+    // Se ejecuta DESPUÉS de los comandos explícitos y ANTES de Groq.
+    if (userMessage && !userMessage.startsWith('/')) {
+      const detectFn = _getDetectIntent();
+      if (detectFn) {
+        const intent = detectFn(userMessage);
+        if (intent) {
+          switch (intent.intent) {
+
+            case 'reminder': {
+              const timeWords = intent.params.rawTime.split(/\s+/);
+              const { ms: timeMs } = _parseReminderTime(timeWords);
+              const reminderText = intent.params.text || intent.params.rawTime;
+              if (timeMs >= 10000 && timeMs <= 86400000 && reminderText.length > 1) {
+                const timeoutId = setTimeout(async () => {
+                  try {
+                    await sock.sendMessage(jid, { text: _botPrefix + '*⏰ Recordatorio:*\n\n' + reminderText });
+                  } catch (_) {}
+                  const list = _reminders.get(chatId) || [];
+                  const idx = list.findIndex(r => r.timeout === timeoutId);
+                  if (idx >= 0) list.splice(idx, 1);
+                }, timeMs);
+                if (!_reminders.has(chatId)) _reminders.set(chatId, []);
+                _reminders.get(chatId).push({ text: reminderText, timeout: timeoutId, time: Date.now() + timeMs });
+                const minutes = Math.round(timeMs / 60000);
+                const timeLabel = minutes >= 60
+                  ? `${Math.floor(minutes / 60)}h ${minutes % 60 > 0 ? (minutes % 60) + 'm' : ''}`
+                  : `${minutes} min`;
+                await _sendText(sock, jid, `⏰ Recordatorio programado en *${timeLabel.trim()}*:\n_${reminderText}_`);
+                return;
+              }
+              break; // tiempo inválido → Groq
+            }
+
+            case 'voice_on': {
+              _voiceModes.set(chatId, true);
+              await _sendText(sock, jid, '🎙️ Modo voz *activado* — responderé con notas de voz.');
+              return;
+            }
+
+            case 'voice_off': {
+              _voiceModes.set(chatId, false);
+              await _sendText(sock, jid, '💬 Modo voz *desactivado* — responderé con texto.');
+              return;
+            }
+
+            case 'list_reminders': {
+              const rems = _reminders.get(chatId) || [];
+              if (rems.length === 0) {
+                await _sendText(sock, jid, 'No tienes recordatorios activos.\n\n_Ejemplo: "Recuérdame en 2 horas que llame a mamá"_');
+                return;
+              }
+              const now = Date.now();
+              const lines = rems.map((r, i) => {
+                const remaining = r.time - now;
+                const mins = Math.round(remaining / 60000);
+                const tl = remaining < 60000 ? 'menos de 1 min'
+                  : mins < 60 ? `${mins} min`
+                  : `${Math.floor(mins / 60)}h ${mins % 60}m`;
+                return `  ${i + 1}. _${r.text}_ → en *${tl}*`;
+              });
+              await _sendText(sock, jid, ['⏰ *Recordatorios activos*', '', ...lines].join('\n'));
+              return;
+            }
+
+            case 'role': {
+              const role = intent.params.role;
+              if (PRESET_ROLES[role]) {
+                groqService.setCustomPrompt(chatId, PRESET_ROLES[role]);
+                groqService.clearHistory(chatId);
+                await _sendText(sock, jid, `Rol cambiado a *${role}* ✓\n_${PRESET_ROLES[role].substring(0, 100)}..._\n\nConversación reiniciada.`);
+                return;
+              }
+              break;
+            }
+
+            case 'model': {
+              const key = intent.params.key;
+              const models = GroqService.AVAILABLE_MODELS;
+              if (key === 'reset') {
+                groqService.resetModel(chatId);
+                await _sendText(sock, jid, 'Modelo restaurado al por defecto: *' + groqService.model.split('/').pop() + '*');
+              } else if (models[key]) {
+                groqService.setModel(chatId, models[key].id);
+                await _sendText(sock, jid, 'Modelo cambiado a *' + models[key].name + '*\n_' + models[key].desc + '_');
+              }
+              return;
+            }
+
+            case 'gif': {
+              const { searchGif } = require('./gifSearch');
+              const query = intent.params.query;
+              try {
+                typingInterval = _startPersistentTyping(sock, jid);
+                const gifUrl = await searchGif(query);
+                _stopPersistentTyping(typingInterval);
+                typingInterval = null;
+                if (!gifUrl) {
+                  await _sendText(sock, jid, 'No encontré GIFs para: _' + query + '_');
+                  return;
+                }
+                const resp = await fetch(gifUrl);
+                const gifBuffer = Buffer.from(await resp.arrayBuffer());
+                await sock.sendMessage(jid, { video: gifBuffer, gifPlayback: true, caption: '' });
+                return;
+              } catch (e) {
+                _stopPersistentTyping(typingInterval);
+                typingInterval = null;
+                break; // Si falla el GIF → Groq responde
+              }
+            }
+
+            case 'qr': {
+              const data = intent.params.data;
+              try {
+                typingInterval = _startPersistentTyping(sock, jid);
+                const qrBuffer = await _generateQrCode(data);
+                _stopPersistentTyping(typingInterval);
+                typingInterval = null;
+                const preview = data.length > 60 ? data.substring(0, 60) + '...' : data;
+                await sock.sendMessage(jid, {
+                  image: qrBuffer,
+                  caption: _botPrefix + `📱 *Código QR*\n_${preview}_`,
+                });
+                return;
+              } catch (e) {
+                _stopPersistentTyping(typingInterval);
+                typingInterval = null;
+                await _sendText(sock, jid, 'Error generando el QR: ' + e.message.substring(0, 80));
+                return;
+              }
+            }
+
+            case 'pdf': {
+              const topic = intent.params.topic;
+              const pdfSvc = _getPdfSvc();
+              if (!pdfSvc || !pdfSvc.isPdfAvailable()) {
+                // Caída graciosa: Groq responde en texto
+                break;
+              }
+              try {
+                _reactToMessage(sock, msg, '📄');
+                typingInterval = _startPersistentTyping(sock, jid);
+                // 1. Generar contenido con IA
+                const contentPrompt =
+                  `Crea un documento completo y bien estructurado sobre: "${topic}".\n\n` +
+                  `Formato:\n` +
+                  `- Usa # para el título principal\n` +
+                  `- ## para secciones\n` +
+                  `- ### para subsecciones\n` +
+                  `- - para listas con viñetas\n` +
+                  `Incluye: introducción, desarrollo, conclusión. Mínimo 500 palabras. Idioma español.\n` +
+                  `Solo el contenido del documento, sin meta-comentarios.`;
+                const aiContent = await groqService.chat(chatId, contentPrompt);
+                const cleanContent = groqService._sanitizeReply
+                  ? groqService._sanitizeReply(aiContent)
+                  : aiContent;
+                // 2. Extraer título del contenido o usar topic
+                const titleMatch = cleanContent.match(/^#\s+(.+)/m);
+                const docTitle = titleMatch
+                  ? titleMatch[1].trim()
+                  : (topic.charAt(0).toUpperCase() + topic.slice(1));
+                // 3. Generar PDF
+                const pdfBuffer = await pdfSvc.generatePdf(docTitle, cleanContent);
+                _stopPersistentTyping(typingInterval);
+                typingInterval = null;
+                const safeName = topic.toLowerCase()
+                  .replace(/[^a-z0-9áéíóúñ\s]/gi, '').replace(/\s+/g, '_')
+                  .substring(0, 28) + '_cortana.pdf';
+                await sock.sendMessage(jid, {
+                  document: pdfBuffer,
+                  mimetype: 'application/pdf',
+                  fileName: safeName,
+                  caption: _botPrefix + `📄 *${docTitle}*\n_Documento generado por Cortana_`,
+                });
+                _reactToMessage(sock, msg, '');
+                return;
+              } catch (e) {
+                _stopPersistentTyping(typingInterval);
+                typingInterval = null;
+                console.error('[Groq] Error generando PDF:', e.message);
+                // Caída graciosa: responder en texto
+                await _sendText(sock, jid, 'No pude generar el PDF. Respondo en texto sobre _' + topic + '_...');
+                // Dejar que Groq responda normalmente
+                break;
+              }
+            }
+
+          } // end switch
+        } // end if intent
+      } // end if detectFn
+    } // end if userMessage
 
     // ========== CONTEXTO: QUOTED MESSAGE + URLs ==========
     let contextParts = [];

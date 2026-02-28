@@ -143,6 +143,84 @@ function setupRouter(sock, groqService) {
           continue;
         }
 
+        // ============================================
+        // LENGUAJE NATURAL — Sin necesidad de /comandos
+        // Detecta intenciones comunes en texto plano.
+        // ============================================
+        if (!text.startsWith('/') && !interactive) {
+          // "dame el briefing" / "quiero el briefing" / "resumen del día"
+          const wantsBriefing =
+            /\b(?:dame|quiero|manda|envía|dime)\s+(?:el|mi)?\s*(?:briefing|resumen\s+(?:de[l]?\s+)?(?:d[ií]a|diario|hoy))\b/i.test(textLower) ||
+            /\bbrief(?:ing)?\s+(?:de\s+)?(?:hoy|ahora)\b/i.test(textLower) ||
+            /\bmi\s+resumen\s+diario\b/i.test(textLower);
+          if (wantsBriefing) {
+            try {
+              await sock.sendPresenceUpdate('composing', jid);
+              await sendBriefingNow(sock, jid);
+            } catch (err) {
+              await sock.sendMessage(jid, { text: PREFIX + 'Error generando briefing: ' + err.message.substring(0, 100) });
+            }
+            continue;
+          }
+
+          // "dame las noticias" / "últimas noticias" / "qué pasó hoy"
+          const wantsNews =
+            /\b(?:dame|quiero|cuéntame|manda|envía)\s+(?:las?\s+)?(?:últimas?\s+)?noticias?\b/i.test(textLower) ||
+            /\bnoticias?\s+(?:de\s+)?(?:hoy|ahora|recientes?|última\s+hora)\b/i.test(textLower) ||
+            /\b(?:qué\s+(?:pasó|hay)\s+(?:hoy|de\s+nuevo))\b/i.test(textLower);
+          if (wantsNews) {
+            try {
+              await sock.sendPresenceUpdate('composing', jid);
+              const prefs = await getPrefs(jid);
+              const topics = prefs.news_topics && prefs.news_topics.length ? prefs.news_topics : ['colombia', 'internacional'];
+              const count = prefs.news_count || 5;
+              const news = await getNewsByTopics(topics, count);
+              const newsText = formatNews(news) || 'No se pudieron obtener noticias en este momento.';
+              await sock.sendMessage(jid, { text: PREFIX + newsText });
+            } catch (err) {
+              await sock.sendMessage(jid, { text: PREFIX + 'Error obteniendo noticias: ' + err.message.substring(0, 80) });
+            }
+            continue;
+          }
+
+          // "ver precios" / "dame los precios" / "cómo van los precios"
+          const wantsPrices =
+            /\b(?:dame|ver|muestra|quiero)\s+(?:los?\s+)?precios?\b/i.test(textLower) ||
+            /\b(?:cómo|como)\s+(?:van|están|estan)\s+(?:los?\s+)?(?:precios?|mercados?|cryptos?)\b/i.test(textLower) ||
+            /\bestado\s+del\s+mercado\b/i.test(textLower);
+          if (wantsPrices) {
+            try {
+              await sock.sendPresenceUpdate('composing', jid);
+              const prefs = await getPrefs(jid);
+              const cryptos = prefs.cryptos && prefs.cryptos.length ? prefs.cryptos : ['BTC'];
+              const fx = prefs.fx_currencies || [];
+              const showTrm = prefs.show_trm !== false;
+              const lines = ['💰 *Precios actuales*', ''];
+              if (showTrm) {
+                try { const trm = await getTRM(); if (trm) lines.push(`💵 *Dólar TRM:* ${_formatCOP(trm.rate)} COP`); } catch (_) {}
+              }
+              const cryptoResults = await Promise.allSettled(cryptos.map(c => getCryptoPrice(c)));
+              for (let i = 0; i < cryptos.length; i++) {
+                if (cryptoResults[i].status === 'fulfilled' && cryptoResults[i].value) {
+                  const b = cryptoResults[i].value;
+                  lines.push(`${CRYPTO_EMOJI[b.symbol] || '🪙'} *${b.symbol}:* ${_formatUSD(b.price_usd)} (${_formatArrow(b.change_24h)})`);
+                }
+              }
+              if (fx.length > 0) {
+                const rates = await getFxRates(fx).catch(() => []);
+                if (rates.length > 0) {
+                  lines.push('', '💱 *Divisas*');
+                  for (const r of rates) lines.push(`${FX_EMOJI[r.currency] || ''} *${FX_NAME[r.currency] || r.currency}:* ${_formatCOP(r.priceCop)} COP`);
+                }
+              }
+              await sock.sendMessage(jid, { text: PREFIX + lines.join('\n') });
+            } catch (err) {
+              await sock.sendMessage(jid, { text: PREFIX + 'Error obteniendo precios: ' + err.message.substring(0, 80) });
+            }
+            continue;
+          }
+        }
+
         // /noticias - obtener noticias ahora (con preferencias del usuario)
         if (textLower === '/noticias') {
           try {
