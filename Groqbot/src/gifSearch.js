@@ -1,40 +1,29 @@
 // Groqbot/src/gifSearch.js
-// Búsqueda de GIFs con GIPHY (primario) + Tenor (fallback, sin API key).
+// Búsqueda de GIFs con GIPHY. Requiere GIPHY_API_KEY en variables de entorno.
 // Usa variantes MP4 medianas para evitar rechazos de WhatsApp por tamaño.
 
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
-// Clave pública de desarrollo de Tenor (documentada por Google/Tenor para uso en desarrollo)
-const TENOR_KEY = 'LIVDSRZULELA';
 const MAX_GIF_BYTES = 14 * 1024 * 1024; // 14 MB — límite seguro para WhatsApp
 
 /**
- * Busca un GIF y retorna su URL de MP4.
- * Primero intenta GIPHY (si hay API key), luego Tenor como fallback.
+ * Busca un GIF y retorna su URL de MP4 vía GIPHY.
  * @param {string} query - Término de búsqueda
  * @returns {{ url: string, source: string } | null}
  */
 async function searchGif(query) {
   if (!query || typeof query !== 'string') return null;
 
-  // Intento 1: GIPHY
-  if (GIPHY_API_KEY) {
-    try {
-      const result = await _searchGiphy(query);
-      if (result) return result;
-    } catch (e) {
-      console.warn('[GIF] GIPHY falló:', e.message, '→ intentando Tenor...');
-    }
+  if (!GIPHY_API_KEY) {
+    console.warn('[GIF] GIPHY_API_KEY no configurada');
+    return null;
   }
 
-  // Intento 2: Tenor (siempre disponible, key pública de desarrollo)
   try {
-    const result = await _searchTenor(query);
-    if (result) return result;
+    return await _searchGiphy(query);
   } catch (e) {
-    console.warn('[GIF] Tenor también falló:', e.message);
+    console.error('[GIF] GIPHY falló:', e.message);
+    return null;
   }
-
-  return null;
 }
 
 /**
@@ -63,32 +52,6 @@ async function _searchGiphy(query) {
       imgs.fixed_height_small?.mp4 ||
       imgs.preview?.mp4;
     if (mp4) return { url: mp4, source: 'giphy' };
-  }
-  return null;
-}
-
-/**
- * Busca en Tenor usando la clave pública de desarrollo.
- * No requiere clave propia — funciona para uso no comercial / dev.
- * Toma los 3 primeros resultados (más relevantes según el API) sin mezclar.
- * locale=es_ES mejora la relevancia para búsquedas en español.
- */
-async function _searchTenor(query) {
-  const url =
-    `https://api.tenor.com/v1/search?q=${encodeURIComponent(query)}` +
-    `&key=${TENOR_KEY}&limit=10&contentfilter=medium&media_filter=minimal&locale=es_ES`;
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) throw new Error(`Tenor ${res.status}`);
-  const data = await res.json();
-  if (!data.results || data.results.length === 0) return null;
-
-  // Sin mezclar: los primeros resultados son los más relevantes para el término buscado
-  const pool = data.results.slice(0, 3);
-  for (const result of pool) {
-    const media = result.media?.[0] || {};
-    const mp4 = media.mp4?.url || media.nanomp4?.url || media.tinymp4?.url;
-    if (mp4) return { url: mp4, source: 'tenor' };
   }
   return null;
 }
