@@ -184,9 +184,46 @@ function formatChangeArrow(pct) {
   return '0.00%';
 }
 
+/**
+ * Obtiene tasas de cambio para divisas fiat vs USD y COP.
+ * @param {string[]} currencies - Códigos ISO: EUR, GBP, JPY, MXN, etc.
+ * @returns {{ currency, rateVsUsd, priceCop }[]}
+ */
+async function getFxRates(currencies) {
+  if (!currencies || currencies.length === 0) return [];
+
+  const cached = _getCached('fx_all_rates');
+  let rates = cached;
+
+  if (!rates) {
+    try {
+      const res = await fetch('https://open.er-api.com/v6/latest/USD');
+      if (!res.ok) throw new Error('FX API: ' + res.status);
+      const data = await res.json();
+      if (data.result !== 'success') throw new Error('FX API bad response');
+      rates = data.rates;
+      _setCache('fx_all_rates', rates);
+    } catch (err) {
+      console.error('[PriceService] Error obteniendo FX rates:', err.message);
+      return [];
+    }
+  }
+
+  const copRate = rates.COP || 4200;
+  return currencies
+    .map(c => c.toUpperCase())
+    .filter(c => rates[c])
+    .map(c => ({
+      currency: c,
+      rateVsUsd: 1 / rates[c],       // 1 unidad de divisa = X USD
+      priceCop: copRate / rates[c],   // 1 unidad de divisa = X COP
+    }));
+}
+
 module.exports = {
   getTRM,
   getCryptoPrice,
+  getFxRates,
   searchCrypto,
   formatUSD,
   formatCOP,

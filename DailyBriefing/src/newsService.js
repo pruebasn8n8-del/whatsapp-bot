@@ -1,21 +1,79 @@
-// DailyBriefing/src/newsService.js - Servicio de noticias
+// DailyBriefing/src/newsService.js - Servicio de noticias con soporte de temas
 
-// Cache de las ultimas noticias para poder expandirlas con /noticia <num>
+// Cache de las últimas noticias para poder expandirlas con /noticia <num>
 let _lastNews = [];
 
+// URLs de Google News RSS por tema
+const TOPIC_URLS = {
+  colombia:       'https://news.google.com/rss?hl=es-CO&gl=CO&ceid=CO:es-CO',
+  internacional:  'https://news.google.com/rss/headlines/section/topic/WORLD?hl=es-419&gl=CO&ceid=CO:es-419',
+  tecnologia:     'https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=es-419&gl=CO&ceid=CO:es-419',
+  deportes:       'https://news.google.com/rss/headlines/section/topic/SPORTS?hl=es-419&gl=CO&ceid=CO:es-419',
+  economia:       'https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=es-419&gl=CO&ceid=CO:es-419',
+  entretenimiento:'https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=es-419&gl=CO&ceid=CO:es-419',
+};
+
 /**
- * Obtiene noticias principales de Colombia.
- * Fuente principal: Google News RSS (mejores titulares locales)
- * Fallback: NewsAPI
- * @param {number} count - Numero de noticias (default: 5)
- * @returns {Array<{ title: string, source: string, url: string, description: string }>}
+ * Obtiene noticias de múltiples temas e intercala los resultados.
+ * @param {string[]} topics - Temas a incluir (ver TOPIC_URLS)
+ * @param {number} totalCount - Total de noticias a devolver
+ * @returns {Array<{ title, source, url, description, topic }>}
+ */
+async function getNewsByTopics(topics = ['colombia', 'internacional'], totalCount = 5) {
+  const validTopics = topics.filter(t => TOPIC_URLS[t]);
+  if (validTopics.length === 0) validTopics.push('colombia');
+
+  // Fetch múltiples topics en paralelo; pedir más de los necesarios para intercalar bien
+  const perTopic = Math.max(3, Math.ceil(totalCount * 1.5 / validTopics.length));
+
+  const results = await Promise.allSettled(
+    validTopics.map(async (topic) => {
+      try {
+        const items = await _fetchGoogleNewsRSSFromUrl(TOPIC_URLS[topic], perTopic);
+        return items.map(item => ({ ...item, topic }));
+      } catch (err) {
+        console.error(`[News] Error obteniendo topic "${topic}":`, err.message);
+        return [];
+      }
+    })
+  );
+
+  // Recoger todos los resultados
+  const all = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') all.push(...r.value);
+  }
+
+  // Interleave: 1 noticia de cada tema por turno hasta completar totalCount
+  const byTopic = {};
+  for (const t of validTopics) byTopic[t] = all.filter(i => i.topic === t);
+
+  const mixed = [];
+  while (mixed.length < totalCount) {
+    let added = false;
+    for (const t of validTopics) {
+      if (byTopic[t].length > 0 && mixed.length < totalCount) {
+        mixed.push(byTopic[t].shift());
+        added = true;
+      }
+    }
+    if (!added) break;
+  }
+
+  _lastNews = mixed;
+  return mixed;
+}
+
+/**
+ * Obtiene noticias (wrapper backward-compatible, usa solo Colombia).
+ * Tiene fallback a NewsAPI si Google News falla.
+ * @param {number} count - Número de noticias
  */
 async function getNews(count = 5) {
   let news = [];
 
-  // Google News RSS primero (mejores noticias de Colombia)
   try {
-    news = await _fetchGoogleNewsRSS(count);
+    news = await _fetchGoogleNewsRSSFromUrl(TOPIC_URLS.colombia, count);
   } catch (err) {
     console.error('[News] Google News RSS error:', err.message);
   }
@@ -37,7 +95,7 @@ async function getNews(count = 5) {
 }
 
 /**
- * Retorna las ultimas noticias cacheadas.
+ * Retorna las últimas noticias cacheadas.
  */
 function getLastNews() {
   return _lastNews;
@@ -45,13 +103,12 @@ function getLastNews() {
 
 /**
  * Obtiene una noticia con su URL real resuelta.
- * @param {number} index - Indice (0-based)
+ * @param {number} index - Índice (0-based)
  */
 async function getExpandedNews(index) {
   if (index < 0 || index >= _lastNews.length) return null;
   const news = { ..._lastNews[index] };
 
-  // Resolver URL si todavia es redirect de Google News
   if (news.url && news.url.includes('news.google.com')) {
     try {
       const realUrl = await _resolveRedirectUrl(news.url);
@@ -63,13 +120,11 @@ async function getExpandedNews(index) {
 }
 
 async function _fetchNewsAPI(apiKey, count) {
-  // top-headlines con pais
   let res = await fetch(
     `https://newsapi.org/v2/top-headlines?country=co&pageSize=${count}&apiKey=${apiKey}`
   );
   let data = await res.json();
 
-  // Si no hay resultados, usar everything
   if (!data.articles || data.articles.length === 0) {
     res = await fetch(
       `https://newsapi.org/v2/everything?q=Colombia&language=es&sortBy=publishedAt&pageSize=${count}&apiKey=${apiKey}`
@@ -83,13 +138,17 @@ async function _fetchNewsAPI(apiKey, count) {
       source: a.source?.name || '',
       url: a.url || '',
       description: _cleanText(a.description || ''),
+      topic: 'colombia',
     }));
   }
   return [];
 }
 
-async function _fetchGoogleNewsRSS(count) {
-  const res = await fetch('https://news.google.com/rss?hl=es-419&gl=CO&ceid=CO:es-419');
+/**
+ * Fetch Google News RSS desde una URL específica.
+ */
+async function _fetchGoogleNewsRSSFromUrl(url, count) {
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Google News RSS HTTP ' + res.status);
   const xml = await res.text();
 
@@ -116,7 +175,7 @@ async function _fetchGoogleNewsRSS(count) {
     }
   }
 
-  // Resolver URLs de Google News en paralelo
+  // Resolver URLs en paralelo
   console.log('[News] Resolviendo URLs de', items.length, 'noticias...');
   await Promise.allSettled(
     items.map(async (item) => {
@@ -154,12 +213,10 @@ async function _resolveRedirectUrl(url) {
       return finalUrl;
     }
 
-    // Intentar extraer del HTML si hay redirect JS o meta refresh
     const html = await res.text();
     const metaMatch = html.match(/content="\d+;url=(https?:\/\/[^"]+)"/i);
     if (metaMatch) return metaMatch[1];
 
-    // Buscar link data-n-au (atributo de Google News para URL del articulo)
     const dataMatch = html.match(/data-n-au="(https?:\/\/[^"]+)"/);
     if (dataMatch) return dataMatch[1];
 
@@ -184,16 +241,26 @@ function _cleanText(text) {
 
 /**
  * Formatea noticias para el briefing.
+ * Muestra el tema si hay múltiples topics.
  */
 function formatNews(news) {
   if (!news || news.length === 0) return null;
 
+  const { TOPIC_LABELS } = (() => {
+    try { return require('../../src/prefsDb'); } catch (_) { return { TOPIC_LABELS: {} }; }
+  })();
+
+  // Detectar si hay múltiples temas
+  const topics = [...new Set(news.map(n => n.topic).filter(Boolean))];
+  const showTopic = topics.length > 1;
+
   const lines = news.map((n, i) => {
     const src = n.source ? ` _(${n.source})_` : '';
-    return `${i + 1}. ${n.title}${src}`;
+    const topicTag = showTopic && n.topic ? ` [${TOPIC_LABELS[n.topic] || n.topic}]` : '';
+    return `${i + 1}. ${n.title}${src}${topicTag}`;
   });
 
-  return '📰 *Noticias destacadas*\n' + lines.join('\n') + '\n\n_/noticia <num> para mas info_';
+  return '📰 *Noticias destacadas*\n' + lines.join('\n') + '\n\n_/noticia <num> para más info_';
 }
 
-module.exports = { getNews, getLastNews, getExpandedNews, formatNews };
+module.exports = { getNews, getNewsByTopics, getLastNews, getExpandedNews, formatNews, TOPIC_URLS };

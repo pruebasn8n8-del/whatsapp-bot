@@ -168,8 +168,26 @@ async function appendMemory(jid, memoryText) {
   }
 }
 
+/**
+ * Retorna todos los contactos no bloqueados (para envío masivo del briefing).
+ */
+async function getAllContacts() {
+  try {
+    const { data, error } = await getSupabase()
+      .from('contacts')
+      .select('jid, name, preferences')
+      .neq('blocked', true);
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.error('[ContactsDB] getAllContacts error:', err.message);
+    return [];
+  }
+}
+
 module.exports = {
   getContact, upsertContact, setPersonality, createContactIfNew,
   saveOnboardingSession, getOnboardingSessionFromDB, clearOnboardingSession,
   isBlocked, blockContact, unblockContact, getBlockedContacts, appendMemory,
+  getAllContacts,
 };

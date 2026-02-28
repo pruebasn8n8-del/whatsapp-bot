@@ -140,12 +140,14 @@ COMANDOS — ASISTENTE IA (Groq)
   /sticker        Convertir imagen citada a sticker WebP
   /gif [texto]    Buscar y enviar un GIF animado
   /recordar       Crear recordatorio: /recordar 2h Reunion
+  /recordatorios  Ver lista de recordatorios activos
+  /buscar [query] Busqueda web explicita con resultados formateados
   /dolar /trm     TRM Colombia del dia
   /btc /eth       Precio de Bitcoin o Ethereum
   /crypto [coin]  Precio de cualquier criptomoneda
   /alerta         Alerta de precio: /alerta eth < 2000
   /alertas        Ver y gestionar alertas activas
-  /miperfil       Cambiar personalidad del usuario
+  /miperfil       Ver o cambiar personalidad del usuario
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMANDOS — BRIEFING Y NOTICIAS (todos los usuarios)
@@ -220,6 +222,27 @@ const CONVERSATION_TTL_MS = 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_RETRIES = 3;
 const MAX_INPUT_LENGTH = 4000;
+const MAX_TOKENS_DEFAULT = 2048;
+
+// ============================================
+// Patrones que indican consulta compleja → chain of thought
+// ============================================
+const THINKING_PATTERNS = [
+  // Matemáticas y cálculos
+  /\b(calcul[ae]|cuanto (es|son|da|resulta|vale)|resuelve|ecuac[ií]on|f[oó]rmula|porcentaje|descuento|inter[eé]s|promedio|probabilidad|demuestra)\b/i,
+  // Análisis y comparación
+  /\b(compar[ae]|analiz[ae]|diferencia entre|mejor.*peor|pros?.*contras?|ventaja.*desventaja|cu[aá]l (es|seria|sería) (mejor|peor|m[aá]s))\b/i,
+  // Planificación y estrategia
+  /\b(plan|estrategia|hoja de ruta|paso a paso|c[oó]mo (hacer|implementar|lograr|conseguir|crear|construir)|deber[ií]a|recomend[ae])\b/i,
+  // Código y programación
+  /\b(c[oó]digo|programa|funci[oó]n|algoritmo|bug|error|refactor|optimiz[ae]|debug|implementa|crea un (script|programa|funci[oó]n|bot|api))\b/i,
+  // Explicaciones profundas
+  /\b(explica (detalladamente|en profundidad|c[oó]mo funciona|por qu[eé])|por qu[eé] (es|funciona|pasa|ocurre)|diferencia (entre|de))\b/i,
+  // Generación de texto largo
+  /\b(escribe|redacta|genera|crea).{0,30}(correo|email|carta|ensayo|art[ií]culo|informe|reporte|propuesta|presentaci[oó]n|resumen)\b/i,
+  // Toma de decisiones
+  /\b(qu[eé] (har[ií]as|recomiendas|aconsejas|opinas)|c[oó]mo (decido|elijo|escojo)|ayuda(me)? (a decidir|a elegir|a escoger))\b/i,
+];
 
 // Modelos disponibles en Groq
 const AVAILABLE_MODELS = {
@@ -297,6 +320,49 @@ class GroqService {
   getModel(userId) { return this.chatModels.get(userId) || this.model; }
   setModel(userId, modelId) { this.chatModels.set(userId, modelId); }
   resetModel(userId) { this.chatModels.delete(userId); }
+
+  // ============================================
+  // Chain of Thought - Razonamiento previo para consultas complejas
+  // ============================================
+
+  /**
+   * Detecta si el mensaje se beneficia de razonamiento estructurado previo.
+   */
+  _shouldDeepThink(message) {
+    if (!message || typeof message !== 'string') return false;
+    if (message.length < 25) return false; // Muy corto = no necesita thinking
+    for (const pattern of THINKING_PATTERNS) {
+      if (pattern.test(message)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Genera un bosquejo de razonamiento interno usando Llama 3.1 8B (rápido).
+   * No se añade al historial — es contexto interno para el modelo principal.
+   */
+  async _generateThinkingContext(message) {
+    try {
+      const completion = await this._withRetry(() =>
+        this.client.chat.completions.create({
+          model: 'llama-3.1-8b-instant',
+          messages: [
+            {
+              role: 'system',
+              content: 'Eres un asistente que planifica respuestas. Dado el mensaje del usuario, genera SOLO un plan de razonamiento breve (3-5 puntos) de cómo responder correctamente. No escribas la respuesta, solo el proceso de pensamiento. Máximo 150 palabras en español.',
+            },
+            { role: 'user', content: message },
+          ],
+          temperature: 0.1,
+          max_tokens: 220,
+        })
+      );
+      return completion.choices[0]?.message?.content?.trim() || null;
+    } catch (e) {
+      console.log('[Groq] Thinking step falló (silencioso):', e.message?.substring(0, 50));
+      return null; // Fallo silencioso — no bloquear la respuesta
+    }
+  }
 
   // ============================================
   // Deteccion proactiva de busqueda web
@@ -434,16 +500,28 @@ class GroqService {
       }
     }
 
+    // ---- THINKING STEP: Razonamiento previo para consultas complejas ----
+    let thinkingCtx = null;
+    if (typeof userMessage === 'string' && this._shouldDeepThink(userMessage) && !proactiveResults) {
+      thinkingCtx = await this._generateThinkingContext(userMessage);
+      if (thinkingCtx) console.log('[Groq] Chain-of-thought generado para respuesta estructurada');
+    }
+
     // ---- Construir system prompt ----
     let systemPrompt = this.getSystemPrompt(userId) +
       "\n\n" + APP_KNOWLEDGE +
       "\n\nFecha actual: " + dateStr + "." +
       "\n\nREGLAS CRITICAS:" +
-      "\n- Tu conocimiento llega hasta diciembre 2023. NUNCA inventes datos posteriores a esa fecha." +
+      "\n- Tu conocimiento llega hasta agosto 2025. NUNCA inventes datos más recientes sin buscar." +
       "\n- Si no estas 100% seguro de un dato, USA la herramienta web_search para verificar." +
       "\n- NUNCA digas 'no tengo acceso a internet' ni 'no puedo buscar'. SIEMPRE tienes la herramienta web_search disponible." +
       "\n- Para preguntas sobre personas, eventos, precios, noticias o datos actuales: OBLIGATORIO usar web_search." +
-      "\n- Prefiere dar informacion verificada a inventar. Si no sabes, busca.";
+      "\n- Prefiere dar informacion verificada a inventar. Si no sabes, busca." +
+      "\n- Formatea tus respuestas con WhatsApp markdown: *negrita*, _cursiva_, ```codigo```. Usa listas con • para puntos.";
+
+    if (thinkingCtx) {
+      systemPrompt += "\n\n[RAZONAMIENTO INTERNO — Úsalo para estructurar tu respuesta de forma precisa y completa]:\n" + thinkingCtx;
+    }
 
     if (proactiveResults) {
       systemPrompt += "\n\n[INFORMACION ACTUALIZADA DE INTERNET - Usa estos datos como fuente principal para tu respuesta]:\n" + proactiveResults;
@@ -457,7 +535,7 @@ class GroqService {
     try {
       // Si ya tenemos resultados proactivos, no necesitamos tools (evita tool calls malformados)
       const useTools = !didSearch && !!(WEB_SEARCH_TOOL && webSearch);
-      const params = { model: currentModel, messages, temperature: 0.7, max_tokens: 1024, top_p: 0.9 };
+      const params = { model: currentModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 };
       if (useTools) { params.tools = [WEB_SEARCH_TOOL]; params.tool_choice = "auto"; }
 
       console.log("[Groq] Chat (model: " + currentModel.split("/").pop() + ", tools: " + useTools + ", proactive: " + didSearch + ")");
@@ -509,7 +587,7 @@ class GroqService {
         }
 
         const final = await this._withRetry(() =>
-          this.client.chat.completions.create({ model: currentModel, messages, temperature: 0.7, max_tokens: 1024, top_p: 0.9 })
+          this.client.chat.completions.create({ model: currentModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
         );
         const reply = final.choices[0]?.message?.content || "No pude generar respuesta con los resultados.";
         this.addToHistory(userId, "assistant", reply);
@@ -538,7 +616,7 @@ class GroqService {
 
           console.log("[Groq] Re-enviando con resultados de busqueda forzada");
           const retryCompletion = await this._withRetry(() =>
-            this.client.chat.completions.create({ model: currentModel, messages: retryMessages, temperature: 0.7, max_tokens: 1024, top_p: 0.9 })
+            this.client.chat.completions.create({ model: currentModel, messages: retryMessages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
           );
           reply = retryCompletion.choices[0]?.message?.content || reply;
         } catch (e) {
@@ -581,7 +659,7 @@ class GroqService {
       // Vision solo funciona con modelos que lo soportan (scout)
       const visionModel = this.model; // Siempre usar scout para vision
       const completion = await this._withRetry(() =>
-        this.client.chat.completions.create({ model: visionModel, messages, temperature: 0.7, max_tokens: 1024, top_p: 0.9 })
+        this.client.chat.completions.create({ model: visionModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
       );
       const reply = completion.choices[0]?.message?.content || "No pude analizar la imagen.";
       this.addToHistory(userId, "assistant", reply);

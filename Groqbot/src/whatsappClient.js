@@ -52,6 +52,15 @@ if (!fs.existsSync(_tmpDir)) {
   fs.mkdirSync(_tmpDir, { recursive: true });
 }
 
+// Lazy import de webSearch para /buscar
+let _webSearch;
+function _getWebSearch() {
+  if (_webSearch === undefined) {
+    try { _webSearch = require('./webSearch').webSearch; } catch (_) { _webSearch = null; }
+  }
+  return _webSearch;
+}
+
 // Roles predefinidos para /role
 const PRESET_ROLES = {
   traductor: "Eres un traductor profesional. Traduce entre espanol e ingles. Si te escriben en espanol, traduce al ingles. Si te escriben en ingles, traduce al espanol. Solo da la traduccion sin explicaciones adicionales.",
@@ -799,45 +808,55 @@ async function handleGroqMessage(msg, sock, groqService) {
       if (cmd === "/help" || cmd === "/ayuda") {
         const currentModel = groqService.getModel(chatId);
         const modelName = Object.values(GroqService.AVAILABLE_MODELS).find(m => m.id === currentModel)?.name || currentModel.split("/").pop();
-        const currentRole = groqService.customPrompts.has(chatId) ? " (personalizado)" : "";
-        const divider = '─'.repeat(25);
+        const hasCustomRole = groqService.customPrompts.has(chatId);
+        const voiceActive = _voiceModes.get(chatId) || false;
+        const activeReminders = (_reminders.get(chatId) || []).length;
+        const activeAlerts = (_priceAlerts.get(chatId) || []).length;
+        const divider = '━'.repeat(26);
         await _sendText(sock, jid, [
-          "*Groq IA*" + currentRole,
+          "🤖 *Cortana — Asistente IA*",
           divider,
           "",
-          "Enviame texto, audio, imagen, documento o URL.",
+          "Envíame *texto*, *audio* 🎙️, *imagen* 🖼️, *documento* 📄 o *URL* 🔗",
+          "Razonamiento profundo automático en preguntas complejas.",
           "",
-          "*Comandos*",
-          "  /modelo  -  Cambiar modelo de IA",
-          "  /voz  -  Respuestas por voz",
-          "  /role  -  Cambiar personalidad",
-          "  /resumen  -  Resumen de conversacion",
-          "  /stats  -  Estadisticas de uso",
-          "  /exportar  -  Exportar conversacion",
-          "  /sticker  -  Imagen a sticker",
-          "  /gif _busqueda_  -  Enviar un GIF",
-          "  /recordar _tiempo texto_  -  Recordatorio",
-          "  /limpiar  -  Limpiar chat y guardar memoria",
-          "  /reset  -  Reiniciar conversacion",
-          "  /stop  -  Desactivar bot",
+          "💬 *Conversación*",
+          "  /modelo  — Cambiar modelo IA",
+          "  /voz  — Modo respuesta por voz",
+          "  /role  — Cambiar personalidad o modo",
+          "  /resumen  — Resumen de la conversación",
+          "  /limpiar  — Limpiar + guardar memoria",
+          "  /reset  — Reiniciar historial",
+          "  /exportar  — Descargar conversación (.txt)",
+          "  /stats  — Ver estadísticas de uso",
           "",
-          "*Precios*",
-          "  /dolar  -  TRM del dia",
-          "  /btc  -  Precio Bitcoin",
-          "  /eth  -  Precio Ethereum",
-          "  /crypto _moneda_  -  Cualquier crypto",
-          "  /alerta _crypto > precio_  -  Alerta",
-          "  /alertas  -  Ver alertas activas",
+          "🔍 *Búsqueda y contenido*",
+          "  /buscar _consulta_  — Búsqueda web explícita",
+          "  URLs  — Leo y analizo páginas automáticamente",
+          "  Reply  — Cito mensajes para dar contexto",
+          "  Docs  — Analizo PDF, TXT, CSV",
           "",
-          "*Automatico*",
-          "  URLs  -  Analizo contenido web",
-          "  Reply  -  Cito mensajes para contexto",
-          "  Docs  -  Analizo archivos adjuntos",
-          "  Grupos  -  Mencioname (@) para responder",
+          "⏰ *Recordatorios*",
+          "  /recordar _2h Llamar a mamá_  — Crear",
+          "  /recordar _30m Reunión_  — Crear",
+          "  /recordatorios  — Ver activos",
+          "",
+          "💰 *Precios crypto*",
+          "  /dolar  — TRM Colombia hoy",
+          "  /btc  /eth  — Bitcoin / Ethereum",
+          "  /crypto _moneda_  — Cualquier crypto",
+          "  /alerta _btc > 100000_  — Crear alerta",
+          "  /alertas  — Ver y borrar alertas",
+          "",
+          "🎨 *Multimedia*",
+          "  /sticker  — Imagen citada → sticker WebP",
+          "  /gif _búsqueda_  — Buscar y enviar GIF",
           "",
           divider,
-          `Modelo: _${modelName}_`,
-        ].join("\n"));
+          `Modelo: _${modelName}_  |  Voz: ${voiceActive ? "*ON*" : "off"}  |  Rol: ${hasCustomRole ? "*personalizado*" : "defecto"}`,
+          activeReminders > 0 ? `Recordatorios: *${activeReminders}* activos` : "",
+          activeAlerts > 0 ? `Alertas: *${activeAlerts}* activas` : "",
+        ].filter(l => l !== "").join("\n"));
         return;
       }
 
@@ -960,6 +979,58 @@ async function handleGroqMessage(msg, sock, groqService) {
           fileName: fileName,
           caption: _botPrefix + "Conversacion exportada (" + history.length + " mensajes)"
         });
+        return;
+      }
+
+      // /recordatorios - listar recordatorios activos
+      if (cmd === "/recordatorios" || cmd === "/reminders") {
+        const rems = _reminders.get(chatId) || [];
+        if (rems.length === 0) {
+          await _sendText(sock, jid, "No tienes recordatorios activos.\n\n_/recordar 30m Llamar a mamá_");
+          return;
+        }
+        const now = Date.now();
+        const lines = rems.map((r, i) => {
+          const remaining = r.time - now;
+          const mins = Math.round(remaining / 60000);
+          const timeLabel = remaining < 60000 ? "menos de 1 min"
+            : mins < 60 ? `${mins} min`
+            : `${Math.floor(mins / 60)}h ${mins % 60}m`;
+          return `  ${i + 1}. _${r.text}_ → en *${timeLabel}*`;
+        });
+        await _sendText(sock, jid, ["⏰ *Recordatorios activos*", "", ...lines, "", "_/recordar <tiempo> <texto> — crear nuevo_"].join("\n"));
+        return;
+      }
+
+      // /buscar <query> - búsqueda web explícita con respuesta formateada por IA
+      const buscarMatch = userMessage.match(/^\/buscar\s+(.+)$/i);
+      if (buscarMatch) {
+        const query = buscarMatch[1].trim();
+        const ws = _getWebSearch();
+        if (!ws) {
+          await _sendText(sock, jid, "La búsqueda web no está disponible ahora mismo.");
+          return;
+        }
+        typingInterval = _startPersistentTyping(sock, jid);
+        try {
+          await _reactToMessage(sock, msg, "🔍");
+          const results = await ws(query);
+          const formatted = await groqService.chat(
+            chatId,
+            `Basándote EXCLUSIVAMENTE en estos resultados de búsqueda web, responde a: "${query}"\n\nResultados:\n${results}\n\nResponde con formato WhatsApp. Si hay fuentes relevantes, mencioná el nombre de cada una.`
+          );
+          _stopPersistentTyping(typingInterval);
+          typingInterval = null;
+          await sock.sendMessage(jid, { text: _botPrefix + _formatForWhatsApp(formatted) });
+        } catch (e) {
+          _stopPersistentTyping(typingInterval);
+          typingInterval = null;
+          await _sendText(sock, jid, "Error en la búsqueda: " + e.message.substring(0, 80));
+        }
+        return;
+      }
+      if (cmd === "/buscar") {
+        await _sendText(sock, jid, "Uso: /buscar <consulta>\n\nEjemplos:\n• /buscar noticias colombia hoy\n• /buscar precio del dólar hoy\n• /buscar últimas noticias tecnología");
         return;
       }
 
@@ -1291,6 +1362,8 @@ async function handleGroqMessage(msg, sock, groqService) {
 
     // ========== PROCESAR CON IA ==========
     console.log("[Groq]", (userMessage || "").substring(0, 80) + "...");
+    // Reacción visual instantánea — el usuario sabe que el bot recibió y está procesando
+    _reactToMessage(sock, msg, "🤔");
     typingInterval = _startPersistentTyping(sock, jid);
 
     const reply = await groqService.chat(chatId, fullMessage);
@@ -1307,6 +1380,8 @@ async function handleGroqMessage(msg, sock, groqService) {
       if (sentMsg) _trackSentMessage(jid, sentMsg);
     }
 
+    // Remover reacción de "pensando" y confirmar envío
+    _reactToMessage(sock, msg, "");
     console.log("[Groq] Respuesta enviada" + ((chatVoiceMode || isVoice) ? " (voz)" : " (texto)"));
 
     // ========== RECORDATORIO CADA 5 MINUTOS PARA LIMPIAR CHAT ==========
@@ -1401,6 +1476,17 @@ async function _sendText(sock, jid, text) {
   const sent = await sock.sendMessage(jid, { text: _botPrefix + text });
   if (sent) _trackSentMessage(jid, sent);
   return sent;
+}
+
+/**
+ * Reacciona a un mensaje con un emoji (feedback visual instantáneo).
+ */
+async function _reactToMessage(sock, msg, emoji) {
+  try {
+    await sock.sendMessage(msg.key.remoteJid, {
+      react: { text: emoji, key: msg.key },
+    });
+  } catch (_) {}
 }
 
 function _formatForWhatsApp(text) {
