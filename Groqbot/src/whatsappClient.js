@@ -113,6 +113,40 @@ async function _convertToWebpSticker(buffer) {
 }
 
 /**
+ * Busca y envía un GIF al chat.
+ * Maneja timeout de descarga, límite de tamaño y fallback a Tenor.
+ * @returns {boolean} true si se envió correctamente
+ */
+async function _sendGifForQuery(sock, jid, query) {
+  const { searchGif, MAX_GIF_BYTES } = require('./gifSearch');
+  const result = await searchGif(query);
+  if (!result) {
+    await _sendText(sock, jid, `No encontré GIFs para: _${query}_\n\nPrueba con otra búsqueda.`);
+    return false;
+  }
+
+  let resp;
+  try {
+    resp = await fetch(result.url, { signal: AbortSignal.timeout(20000) });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} al descargar GIF`);
+  } catch (e) {
+    throw new Error('Error descargando el GIF: ' + e.message);
+  }
+
+  const gifBuffer = Buffer.from(await resp.arrayBuffer());
+
+  if (gifBuffer.length > MAX_GIF_BYTES) {
+    console.warn(`[GIF] Demasiado grande: ${Math.round(gifBuffer.length / 1024 / 1024)}MB — omitiendo`);
+    await _sendText(sock, jid, `El GIF era demasiado grande. Prueba con _/gif ${query}_ de nuevo para intentar otro.`);
+    return false;
+  }
+
+  await sock.sendMessage(jid, { video: gifBuffer, gifPlayback: true, caption: '' });
+  console.log(`[GIF] Enviado (${result.source}, ${Math.round(gifBuffer.length / 1024)}KB): ${query}`);
+  return true;
+}
+
+/**
  * Genera un código QR como imagen PNG (free API, sin key).
  * https://api.qrserver.com/v1/create-qr-code/
  */
@@ -1168,7 +1202,6 @@ async function handleGroqMessage(msg, sock, groqService) {
       // /gif <busqueda> - Buscar y enviar GIF
       const gifMatch = userMessage.match(/^\/gif\s+(.+)$/i);
       if (gifMatch || cmd === "/gif") {
-        const { searchGif } = require("./gifSearch");
         const query = gifMatch ? gifMatch[1].trim() : "";
         if (!query) {
           await _sendText(sock, jid, "Uso: /gif <busqueda>\n\nEjemplo: /gif risa");
@@ -1176,23 +1209,12 @@ async function handleGroqMessage(msg, sock, groqService) {
         }
         try {
           typingInterval = _startPersistentTyping(sock, jid);
-          const gifUrl = await searchGif(query);
+          await _sendGifForQuery(sock, jid, query);
           _stopPersistentTyping(typingInterval);
-          if (!gifUrl) {
-            await _sendText(sock, jid, "No encontre GIFs para: _" + query + "_");
-            return;
-          }
-          // Descargar el MP4 de GIPHY
-          const resp = await fetch(gifUrl);
-          const gifBuffer = Buffer.from(await resp.arrayBuffer());
-          await sock.sendMessage(jid, {
-            video: gifBuffer,
-            gifPlayback: true,
-            caption: "",
-          });
-          console.log("[Groq] GIF enviado para:", query);
+          typingInterval = null;
         } catch (e) {
           _stopPersistentTyping(typingInterval);
+          typingInterval = null;
           console.error("[Groq] Error buscando GIF:", e.message);
           await _sendText(sock, jid, "Error buscando GIF: " + e.message.substring(0, 100));
         }
@@ -1470,20 +1492,12 @@ async function handleGroqMessage(msg, sock, groqService) {
             }
 
             case 'gif': {
-              const { searchGif } = require('./gifSearch');
               const query = intent.params.query;
               try {
                 typingInterval = _startPersistentTyping(sock, jid);
-                const gifUrl = await searchGif(query);
+                await _sendGifForQuery(sock, jid, query);
                 _stopPersistentTyping(typingInterval);
                 typingInterval = null;
-                if (!gifUrl) {
-                  await _sendText(sock, jid, 'No encontré GIFs para: _' + query + '_');
-                  return;
-                }
-                const resp = await fetch(gifUrl);
-                const gifBuffer = Buffer.from(await resp.arrayBuffer());
-                await sock.sendMessage(jid, { video: gifBuffer, gifPlayback: true, caption: '' });
                 return;
               } catch (e) {
                 _stopPersistentTyping(typingInterval);
