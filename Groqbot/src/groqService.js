@@ -473,6 +473,22 @@ class GroqService {
     return false;
   }
 
+  /**
+   * Limpia tokens especiales de Llama que a veces se filtran en la respuesta.
+   */
+  _sanitizeReply(text) {
+    if (!text || typeof text !== 'string') return text;
+    return text
+      // Tokens especiales de Llama 3 / Llama 4
+      .replace(/<\|start_header_id\|>[\s\S]*?<\|end_header_id\|>\s*/g, '')
+      .replace(/<\|eot_id\|>/g, '')
+      .replace(/<\|begin_of_text\|>/g, '')
+      .replace(/<\|end_of_text\|>/g, '')
+      .replace(/<\|finetune_right_pad_id\|>/g, '')
+      .replace(/<\|[a-z_]+\|>/g, '')
+      .trim();
+  }
+
   // ============================================
   // Retry con exponential backoff
   // ============================================
@@ -560,6 +576,7 @@ class GroqService {
       "\n- NUNCA preguntes al usuario si quiere respuesta en audio o en texto. SIEMPRE responde directamente en texto con la informacion." +
       "\n- NUNCA digas 'dame un momento', 'espera mientras busco', 'voy a buscar', 'te recomiendo que esperes' ni frases similares. Responde siempre directamente con los datos." +
       "\n- Cuando tengas datos reales en el contexto (clima, sismos, festivos, precios, busqueda web), integralos de forma natural en tu respuesta sin mencionar que usaste una herramienta." +
+      "\n- NUNCA recomiendes ni menciones como fuente: Revista Semana, Caracol Radio, Caracol TV, RCN Radio, RCN TV ni ningún medio colombiano de esos. Usa fuentes internacionales (Reuters, BBC, AP, El País, Infobae, DW, France 24) o colombianas alternativas (El Tiempo, El Colombiano, La Silla Vacía)." +
       "\n- Formatea tus respuestas con WhatsApp markdown: *negrita*, _cursiva_, ```codigo```. Usa listas con • para puntos.";
 
     if (thinkingCtx) {
@@ -645,13 +662,13 @@ class GroqService {
         const final = await this._withRetry(() =>
           this.client.chat.completions.create({ model: currentModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
         );
-        const reply = final.choices[0]?.message?.content || "No pude generar respuesta con los resultados.";
+        const reply = this._sanitizeReply(final.choices[0]?.message?.content || "No pude generar respuesta con los resultados.");
         this.addToHistory(userId, "assistant", reply);
         return reply;
       }
 
       // ---- Respuesta sin tool call ----
-      let reply = msg.content || "No pude generar una respuesta.";
+      let reply = this._sanitizeReply(msg.content || "No pude generar una respuesta.");
 
       // ---- CAPA 2: Post-validacion - detectar incertidumbre ----
       if (!didSearch && webSearch && this._hasUncertainty(reply)) {
@@ -674,7 +691,7 @@ class GroqService {
           const retryCompletion = await this._withRetry(() =>
             this.client.chat.completions.create({ model: currentModel, messages: retryMessages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
           );
-          reply = retryCompletion.choices[0]?.message?.content || reply;
+          reply = this._sanitizeReply(retryCompletion.choices[0]?.message?.content || reply);
         } catch (e) {
           console.log("[Groq] Busqueda forzada fallo:", e.message);
         }
@@ -717,7 +734,7 @@ class GroqService {
       const completion = await this._withRetry(() =>
         this.client.chat.completions.create({ model: visionModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
       );
-      const reply = completion.choices[0]?.message?.content || "No pude analizar la imagen.";
+      const reply = this._sanitizeReply(completion.choices[0]?.message?.content || "No pude analizar la imagen.");
       this.addToHistory(userId, "assistant", reply);
       return reply;
     } catch (error) {
