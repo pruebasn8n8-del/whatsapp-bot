@@ -557,6 +557,9 @@ class GroqService {
       "\n- NUNCA digas 'no tengo acceso a internet' ni 'no puedo buscar'. SIEMPRE tienes la herramienta web_search disponible." +
       "\n- Para preguntas sobre personas, eventos, precios, noticias o datos actuales: OBLIGATORIO usar web_search." +
       "\n- Prefiere dar informacion verificada a inventar. Si no sabes, busca." +
+      "\n- NUNCA preguntes al usuario si quiere respuesta en audio o en texto. SIEMPRE responde directamente en texto con la informacion." +
+      "\n- NUNCA digas 'dame un momento', 'espera mientras busco', 'voy a buscar', 'te recomiendo que esperes' ni frases similares. Responde siempre directamente con los datos." +
+      "\n- Cuando tengas datos reales en el contexto (clima, sismos, festivos, precios, busqueda web), integralos de forma natural en tu respuesta sin mencionar que usaste una herramienta." +
       "\n- Formatea tus respuestas con WhatsApp markdown: *negrita*, _cursiva_, ```codigo```. Usa listas con • para puntos.";
 
     if (thinkingCtx) {

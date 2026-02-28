@@ -482,39 +482,55 @@ const FREE_API_TOOLS = [
 
 // Detección proactiva — cuándo llamar a un API antes que el modelo responda
 // Retorna { tool, args } o null
+// Política: mejor lanzar una API de más que no responder con datos reales.
 function detectProactiveTool(message) {
   if (!message || typeof message !== 'string') return null;
   const msg = message.toLowerCase().trim();
-  if (msg.length < 8) return null;
+  if (msg.length < 5) return null;
 
-  // ---- Clima con ciudad explícita ----
-  const weatherCityPatterns = [
-    /\b(?:clima|tiempo|temperatura|lluvia|pronostico|pronóstico|calor|frío|frio|va a llover|nevar)\b.{0,40}\ben\b.{0,25}([a-záéíóúñü][a-záéíóúñü\s]{2,25})/i,
-    /\b(?:como|cómo)\s+(?:esta|está)\s+el\s+(?:clima|tiempo|temperatura)\s+(?:en|de)\s+([a-záéíóúñü][a-záéíóúñü\s]{2,25})/i,
-    /\b([a-záéíóúñü][a-záéíóúñü\s]{2,20})\s+(?:clima|tiempo|temperatura|lluvia|pronostico)/i,
-  ];
-  for (const pat of weatherCityPatterns) {
-    const m = msg.match(pat);
-    if (m && m[1]) {
-      const city = m[1].trim().replace(/\b(hoy|mañana|ahora|este|la)\b/gi, '').trim();
-      if (city.length > 2) return { tool: 'get_weather', args: { city } };
+  // ---- Clima: cualquier mención de palabras clave climáticas ----
+  const weatherKeyword = /\b(clima|temperatura|tiempo(?!\s+libre|\s+es\s+oro|\s+muerto|\s+de\s+calidad|\s+que\s+falta)(?!\s+libre)|lluvi[ao]|lloviendo|va\s+a\s+llover|pronostic[oa]|calor\b|fr[íi]o\b|nublado|despejado|nevar|nevada|granizo|tormenta\b|humedad|viento\b|sol\s+hoy)\b/i;
+  if (weatherKeyword.test(msg)) {
+    // Intentar extraer ciudad del mensaje
+    const cityExtractors = [
+      // "en Bogotá", "en Madrid" — la ciudad viene después de "en"
+      /\ben\s+((?:[a-záéíóúñü]+\s*){1,3}?)(?:\s*[?!.,]|\s*$)/i,
+      // "de Medellín", "para Cali"
+      /\b(?:de|para)\s+((?:[a-záéíóúñü]+\s*){1,2}?)(?:\s*[?!.,]|\s*$)/i,
+      // "clima [ciudad]" o "[ciudad] temperatura"
+      /(?:clima|temperatura|tiempo)\s+(?:de\s+|en\s+)?((?:[a-záéíóúñü]+\s*){1,2}?)(?:\s*[?!.,]|\s*$)/i,
+      /\b((?:[a-záéíóúñü]+\s*){1,2}?)\s+(?:clima|temperatura|tiempo|lluvia)\b/i,
+    ];
+
+    // Palabras a ignorar como ciudades
+    const STOP_WORDS = /^(el|la|los|las|un|una|hoy|mañana|ahora|este|esta|que|del|de|en|sobre|acerca|actual|actualmente|hace|como|cómo|cual|cuál|bogota|bogotá|colombia)$/i;
+
+    for (const pat of cityExtractors) {
+      const m = msg.match(pat);
+      if (m && m[1]) {
+        const raw = m[1].trim();
+        // Eliminar stop words y limpiar
+        const city = raw.split(/\s+/)
+          .filter(w => w.length > 2 && !STOP_WORDS.test(w))
+          .join(' ')
+          .trim();
+        if (city.length > 2) {
+          return { tool: 'get_weather', args: { city } };
+        }
+      }
     }
-  }
 
-  // ---- Clima general (sin ciudad → Bogotá) ----
-  if (/\b(?:va a llover hoy|esta lloviendo|como esta el tiempo hoy|que tal el clima|temperatura hoy|hace calor hoy|esta frio hoy)\b/i.test(msg)) {
+    // Sin ciudad → Bogotá por defecto
     return { tool: 'get_weather', args: { city: 'Bogota' } };
   }
 
   // ---- Sismos ----
-  if (/\b(?:sismo|terremoto|temblor|sismos|terremotos|actividad sismica|sísmica|hubo temblor)\b/i.test(msg)) {
+  if (/\b(sismo|terremoto|temblor|sismos|terremotos|actividad\s+s[íi]smica|hubo\s+temblor|hay\s+temblor)\b/i.test(msg)) {
     return { tool: 'get_recent_earthquakes', args: { min_magnitude: 4.5 } };
   }
 
-  // ---- Festivos Colombia ----
-  if (/\b(?:festivo|feriado|día no laboral|puente festivo|dias festivos)\b.{0,30}\b(?:colombia|colombi)\b/i.test(msg) ||
-      /\b(?:proximo|siguiente|cuándo es el|cuando es el)\s+(?:festivo|feriado)\b/i.test(msg) ||
-      /\b(?:festivos?|feriados?)\s+(?:de|en|del)\s+(?:colombia|este año|este mes)\b/i.test(msg)) {
+  // ---- Festivos / feriados ----
+  if (/\b(festivo|feriado|d[íi]a\s+no\s+laboral|puente\s+festivo|dias?\s+festivos?|feriados?)\b/i.test(msg)) {
     return { tool: 'get_public_holidays', args: { country_code: 'CO' } };
   }
 

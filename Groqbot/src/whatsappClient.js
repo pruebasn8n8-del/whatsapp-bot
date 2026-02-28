@@ -35,7 +35,7 @@ const _cleanupPromptSent = new Map(); // chatId -> timestamp
 const _sessionStartTime = new Map(); // chatId -> timestamp del primer mensaje de la sesion
 const _chatMessageKeys = new Map(); // chatId -> [{ key, ts }] mensajes enviados por el bot
 const SELECTION_TIMEOUT = 60 * 1000;
-const CLEANUP_REMIND_INTERVAL_MS = 5 * 60 * 1000; // recordatorio cada 5 minutos
+const CLEANUP_REMIND_INTERVAL_MS = 20 * 60 * 1000; // recordatorio cada 20 minutos
 const MAX_TRACKED_MSGS = 80; // Maximo de keys a recordar por chat
 
 // Import lazy de contactsDb (puede no estar disponible si falta Supabase)
@@ -684,7 +684,7 @@ async function handleGroqMessage(msg, sock, groqService) {
         if (interactive.id === "limpiar_no") {
           _pendingClearConfirm.delete(chatId);
           _cleanupPromptSent.set(chatId, Date.now()); // reinicia el cooldown
-          await _sendText(sock, jid, "Entendido, te avisaré en 5 minutos.");
+          await _sendText(sock, jid, "Entendido, te avisaré más adelante.");
           return;
         }
         if (interactive.id === "limpiar_instrucciones") {
@@ -740,7 +740,7 @@ async function handleGroqMessage(msg, sock, groqService) {
             await _sendText(sock, jid, "Historial del bot limpiado sin guardar memoria.");
           } else if (num === 3) {
             _cleanupPromptSent.set(chatId, Date.now());
-            await _sendText(sock, jid, "Entendido, te avisaré en 5 minutos.");
+            await _sendText(sock, jid, "Entendido, te avisaré más adelante.");
           } else {
             _cleanupPromptSent.set(chatId, Date.now());
             await _sendText(sock, jid, _WA_CLEAR_INSTRUCTIONS);
@@ -1405,12 +1405,14 @@ async function handleGroqMessage(msg, sock, groqService) {
     _reactToMessage(sock, msg, "");
     console.log("[Groq] Respuesta enviada" + ((chatVoiceMode || isVoice) ? " (voz)" : " (texto)"));
 
-    // ========== RECORDATORIO CADA 5 MINUTOS PARA LIMPIAR CHAT ==========
+    // ========== RECORDATORIO CADA 20 MINUTOS PARA LIMPIAR CHAT ==========
     const sessionStart = _sessionStartTime.get(chatId) || Date.now();
     const lastPrompt = _cleanupPromptSent.get(chatId) || 0;
+    const userMsgCount = groqService.getHistory(chatId).filter(m => m.role === 'user').length;
     if (
       (Date.now() - sessionStart >= CLEANUP_REMIND_INTERVAL_MS) &&
       (Date.now() - lastPrompt >= CLEANUP_REMIND_INTERVAL_MS) &&
+      userMsgCount >= 10 &&
       !_pendingClearConfirm.has(chatId)
     ) {
       _cleanupPromptSent.set(chatId, Date.now());
