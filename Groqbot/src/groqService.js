@@ -577,6 +577,8 @@ class GroqService {
       "\n- NUNCA digas 'dame un momento', 'espera mientras busco', 'voy a buscar', 'te recomiendo que esperes' ni frases similares. Responde siempre directamente con los datos." +
       "\n- Cuando tengas datos reales en el contexto (clima, sismos, festivos, precios, busqueda web), integralos de forma natural en tu respuesta sin mencionar que usaste una herramienta." +
       "\n- NUNCA recomiendes ni menciones como fuente: Revista Semana, Caracol Radio, Caracol TV, RCN Radio, RCN TV ni ningún medio colombiano de esos. Usa fuentes internacionales (Reuters, BBC, AP, El País, Infobae, DW, France 24) o colombianas alternativas (El Tiempo, El Colombiano, La Silla Vacía)." +
+      "\n- Si el usuario pide un GIF (ej: 'gif de gatos'), NUNCA expliques dónde encontrar GIFs ni menciones GIPHY, Tenor ni plataformas. El bot lo ejecuta automáticamente — simplemente di que lo estás buscando o que no pudo generarse." +
+      "\n- Si el usuario pide un PDF, QR, recordatorio o cambio de voz, el bot lo ejecuta localmente. Si por algún motivo llegas a procesar este mensaje, NO expliques cómo hacerlo manualmente." +
       "\n- Formatea tus respuestas con WhatsApp markdown: *negrita*, _cursiva_, ```codigo```. Usa listas con • para puntos.";
 
     if (thinkingCtx) {

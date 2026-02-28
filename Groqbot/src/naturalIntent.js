@@ -138,42 +138,61 @@ function detectNaturalIntent(text) {
   }
 
   // ==========================================================
-  // GIF
+  // GIF — muy permisivo: "gif de X", "gif X", "gif calistenia"
+  // No requiere verbos trigger — si el mensaje empieza con "gif"
+  // o contiene "gif de X", se ejecuta directamente.
   // ==========================================================
-  const gifMatch = msg.match(/\b(?:mándame|busca|envíame|dame|pon|muéstrame)\s+(?:un\s+)?gif\s+(?:de\s+)?(.+?)$/i);
-  if (gifMatch && gifMatch[1] && gifMatch[1].trim().length > 1) {
-    return { intent: 'gif', params: { query: gifMatch[1].trim() } };
+  // "gif de calistenia", "gif ejercicios", "gif gatos", "un gif de baile"
+  const gifDirect = msg.match(/^(?:un\s+)?gif\s+(?:de\s+)?(.{2,})$/i);
+  if (gifDirect && gifDirect[1]) {
+    return { intent: 'gif', params: { query: gifDirect[1].trim() } };
+  }
+  // "mándame/dame/busca/envíame un gif de X"
+  const gifVerb = msg.match(/\b(?:mándame|busca|envíame|dame|pon|muéstrame|manda)\s+(?:un\s+)?gif\s+(?:de\s+)?(.+?)$/i);
+  if (gifVerb && gifVerb[1]) {
+    return { intent: 'gif', params: { query: gifVerb[1].trim() } };
+  }
+  // "gif de X" en cualquier parte del mensaje
+  const gifDe = msg.match(/\bgif\s+de\s+(.{2,})$/i);
+  if (gifDe && gifDe[1]) {
+    return { intent: 'gif', params: { query: gifDe[1].trim() } };
   }
 
   // ==========================================================
   // PDF — "crea un PDF sobre X" / "genera un informe de X"
   // ==========================================================
+  // Con verbos: "crea un pdf sobre X", "genera un informe de X"
   const pdfMatch = msg.match(
-    /\b(?:crea|genera|hazme|escribe|redacta|necesito|quiero|dame)\s+(?:un\s+)?(?:pdf|documento|informe|reporte|doc|artículo|ensayo)\s+(?:sobre|de|acerca\s+de|con\s+info(?:rmación)?\s+de|para|del?)\s+(.+?)$/i
+    /\b(?:crea|genera|hazme|escribe|redacta|necesito|quiero|dame)\s+(?:un\s+)?(?:pdf|documento|informe|reporte|doc|artículo|ensayo)\s+(?:sobre|de|acerca\s+de|con\s+info(?:rmación)?\s+de|para|del?)?\s*(.{4,})$/i
   );
   if (pdfMatch && pdfMatch[1] && pdfMatch[1].trim().length > 3) {
     return { intent: 'pdf', params: { topic: pdfMatch[1].trim() } };
   }
-  // "quiero un PDF de X"
-  const pdfMatch2 = msg.match(
-    /\b(?:quiero|necesito)\s+(?:un\s+)?(?:pdf|documento|informe|reporte)\s+(?:de|sobre|acerca\s+de)\s+(.+?)$/i
-  );
-  if (pdfMatch2 && pdfMatch2[1] && pdfMatch2[1].trim().length > 3) {
-    return { intent: 'pdf', params: { topic: pdfMatch2[1].trim() } };
+  // "pdf sobre X", "pdf de X" (inicio de mensaje)
+  const pdfDirect = msg.match(/^pdf\s+(?:sobre|de|acerca\s+de)?\s*(.{4,})$/i);
+  if (pdfDirect && pdfDirect[1]) {
+    return { intent: 'pdf', params: { topic: pdfDirect[1].trim() } };
   }
 
   // ==========================================================
-  // QR CODE — "genera un QR de X" / "crea un código QR para X"
+  // QR CODE — "genera un QR de X" / "qr de X" / "qr https://..."
   // ==========================================================
+  // Con verbos
   const qrMatch = msg.match(
     /\b(?:crea|genera|hazme|haz|dame)\s+(?:un\s+)?(?:código\s+)?qr\s+(?:de|para|con)?\s*(.+?)$/i
   );
   if (qrMatch && qrMatch[1] && qrMatch[1].trim().length > 1) {
     return { intent: 'qr', params: { data: qrMatch[1].trim() } };
   }
-  const qrMatch2 = msg.match(/\bqr\s+(?:de|para|con)\s+(.+?)$/i);
-  if (qrMatch2 && qrMatch2[1]) {
-    return { intent: 'qr', params: { data: qrMatch2[1].trim() } };
+  // "qr de X" o "qr X" (inicio de mensaje, muy permisivo)
+  const qrDirect = msg.match(/^qr\s+(?:de|para|con)?\s*(.{2,})$/i);
+  if (qrDirect && qrDirect[1]) {
+    return { intent: 'qr', params: { data: qrDirect[1].trim() } };
+  }
+  // "código qr de X"
+  const qrCodigo = msg.match(/\bcódigo\s+qr\s+(?:de|para)?\s*(.{2,})$/i);
+  if (qrCodigo && qrCodigo[1]) {
+    return { intent: 'qr', params: { data: qrCodigo[1].trim() } };
   }
 
   return null;
