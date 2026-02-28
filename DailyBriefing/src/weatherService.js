@@ -8,6 +8,21 @@ const DEFAULT_LON = -74.0817;
 const DEFAULT_CITY = 'Bogota';
 
 /**
+ * Geocodifica una ciudad y retorna sus coordenadas usando Open-Meteo Geocoding.
+ * @param {string} cityName - Nombre de la ciudad
+ * @returns {{ lat, lon, name, country, timezone }}
+ */
+async function geocodeCity(cityName) {
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=1&language=es&format=json`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(7000) });
+  if (!res.ok) throw new Error('Geocoding error: ' + res.status);
+  const data = await res.json();
+  if (!data.results || data.results.length === 0) throw new Error(`Ciudad "${cityName}" no encontrada`);
+  const r = data.results[0];
+  return { lat: r.latitude, lon: r.longitude, name: r.name, country: r.country, timezone: r.timezone };
+}
+
+/**
  * Obtiene el clima actual y pronostico del dia usando Open-Meteo.
  * No requiere API key ni registro.
  * @param {object} opts
@@ -115,4 +130,18 @@ function formatWeather(weather) {
   ].filter(Boolean).join('\n');
 }
 
-module.exports = { getWeather, formatWeather };
+/**
+ * Obtiene el clima para cualquier ciudad por nombre.
+ * @param {string} cityName
+ */
+async function getWeatherByCity(cityName) {
+  try {
+    const geo = await geocodeCity(cityName);
+    return await getWeather({ lat: geo.lat, lon: geo.lon, city: geo.name });
+  } catch (err) {
+    console.error('[Weather] getWeatherByCity error:', err.message);
+    return null;
+  }
+}
+
+module.exports = { getWeather, getWeatherByCity, geocodeCity, formatWeather };

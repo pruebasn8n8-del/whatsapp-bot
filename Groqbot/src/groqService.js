@@ -15,6 +15,18 @@ try {
   WEB_SEARCH_TOOL = null;
 }
 
+// APIs gratuitas sin API key (clima, divisas, países, sismos, festivos)
+let FREE_API_TOOLS = [], callFreeApiTool = null, detectProactiveTool = null;
+try {
+  const fat = require("./freeApiTools");
+  FREE_API_TOOLS = fat.FREE_API_TOOLS || [];
+  callFreeApiTool = fat.callFreeApiTool;
+  detectProactiveTool = fat.detectProactiveTool;
+  console.log("[Groq] freeApiTools cargado: " + FREE_API_TOOLS.length + " herramientas");
+} catch (err) {
+  console.error("[Groq] ERROR cargando freeApiTools:", err.message);
+}
+
 // ============================================
 // Conocimiento fijo del bot (identidad, creador, app)
 // Siempre inyectado en el system prompt
@@ -125,6 +137,17 @@ CAPACIDADES DEL BOT
   - Memoria persistente por usuario (guardada en Supabase)
   - Bot de finanzas con Google Sheets privado por usuario
   - Briefing diario automatico con noticias, precios y preferencias personales
+  - DATOS EN TIEMPO REAL SIN API KEY (se activan automaticamente segun el contexto):
+      Clima: temperatura, humedad, viento, pronostico 3 dias para CUALQUIER ciudad del mundo
+      Tasas de cambio: EUR, GBP, JPY, MXN, BRL, CAD, CHF, CNY y mas vs USD/EUR
+      Info de paises: capital, poblacion, moneda, idiomas, area, zonas horarias
+      Sismos recientes: ultimos 7 dias a nivel mundial (USGS NEIC)
+      Festivos: dias feriados de cualquier pais por ano
+  - Cuando el usuario pregunte por clima de cualquier ciudad, SIEMPRE usar la herramienta get_weather
+  - Cuando pregunte por sismos/terremotos, SIEMPRE usar get_recent_earthquakes
+  - Cuando pregunte por festivos/feriados, SIEMPRE usar get_public_holidays
+  - Cuando pregunte por tasas de cambio (excepto COP), usar get_exchange_rate
+  - Cuando pregunte por datos de un pais, usar get_country_info
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMANDOS — ASISTENTE IA (Groq)
@@ -142,6 +165,7 @@ COMANDOS — ASISTENTE IA (Groq)
   /recordar       Crear recordatorio: /recordar 2h Reunion
   /recordatorios  Ver lista de recordatorios activos
   /buscar [query] Busqueda web explicita con resultados formateados
+  /clima [ciudad] Clima actual + pronostico 3 dias (Open-Meteo, sin key)
   /dolar /trm     TRM Colombia del dia
   /btc /eth       Precio de Bitcoin o Ethereum
   /crypto [coin]  Precio de cualquier criptomoneda
@@ -483,9 +507,25 @@ class GroqService {
     const dateStr = new Date().toLocaleDateString("es-CO", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
     let didSearch = false;
 
-    // ---- CAPA 1: Busqueda proactiva ----
+    // ---- CAPA 1A: APIs gratuitas proactivas (clima, sismos, festivos) ----
     let proactiveResults = null;
-    if (webSearch && typeof userMessage === "string") {
+    if (typeof userMessage === "string" && detectProactiveTool) {
+      const proactiveApi = detectProactiveTool(userMessage);
+      if (proactiveApi) {
+        console.log("[Groq] API proactiva: " + proactiveApi.tool);
+        this.stats.searches++;
+        try {
+          proactiveResults = await callFreeApiTool(proactiveApi.tool, proactiveApi.args);
+          didSearch = true;
+          console.log("[Groq] Datos obtenidos de " + proactiveApi.tool);
+        } catch (e) {
+          console.log("[Groq] API proactiva fallo (" + proactiveApi.tool + "):", e.message);
+        }
+      }
+    }
+
+    // ---- CAPA 1B: Busqueda web proactiva (solo si no hubo API proactiva) ----
+    if (!proactiveResults && webSearch && typeof userMessage === "string") {
       const { search, query } = this._shouldProactiveSearch(userMessage);
       if (search) {
         console.log("[Groq] Busqueda proactiva detectada: \"" + query.substring(0, 80) + "\"");
@@ -534,9 +574,14 @@ class GroqService {
 
     try {
       // Si ya tenemos resultados proactivos, no necesitamos tools (evita tool calls malformados)
-      const useTools = !didSearch && !!(WEB_SEARCH_TOOL && webSearch);
+      // Combinar web_search + free API tools
+      const allTools = [
+        ...(WEB_SEARCH_TOOL && webSearch ? [WEB_SEARCH_TOOL] : []),
+        ...FREE_API_TOOLS,
+      ];
+      const useTools = !didSearch && allTools.length > 0;
       const params = { model: currentModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 };
-      if (useTools) { params.tools = [WEB_SEARCH_TOOL]; params.tool_choice = "auto"; }
+      if (useTools) { params.tools = allTools; params.tool_choice = "auto"; }
 
       console.log("[Groq] Chat (model: " + currentModel.split("/").pop() + ", tools: " + useTools + ", proactive: " + didSearch + ")");
 
@@ -571,18 +616,26 @@ class GroqService {
 
       // ---- Procesar tool calls del modelo ----
       if (msg.tool_calls && msg.tool_calls.length > 0) {
-        console.log("[Groq] " + msg.tool_calls.length + " busqueda(s) web solicitada(s) por modelo");
+        console.log("[Groq] " + msg.tool_calls.length + " tool call(s) solicitados por modelo");
         messages.push(msg);
         didSearch = true;
 
         for (const tc of msg.tool_calls) {
+          let args;
+          try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
+
           if (tc.function.name === "web_search") {
-            let args;
-            try { args = JSON.parse(tc.function.arguments); } catch { args = { query: userMessage }; }
-            console.log("[Groq] Buscando: \"" + args.query + "\"");
+            const query = args.query || (typeof userMessage === "string" ? userMessage : "");
+            console.log("[Groq] web_search: \"" + query.substring(0, 80) + "\"");
             this.stats.searches++;
-            const results = await webSearch(args.query);
+            const results = await webSearch(query);
             messages.push({ role: "tool", tool_call_id: tc.id, content: results });
+          } else if (callFreeApiTool) {
+            // free API tools: get_weather, get_exchange_rate, get_country_info, get_recent_earthquakes, get_public_holidays
+            console.log("[Groq] free API: " + tc.function.name);
+            this.stats.searches++;
+            const result = await callFreeApiTool(tc.function.name, args);
+            messages.push({ role: "tool", tool_call_id: tc.id, content: result });
           }
         }
 

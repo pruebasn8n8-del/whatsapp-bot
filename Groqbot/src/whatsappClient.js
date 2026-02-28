@@ -830,11 +830,13 @@ async function handleGroqMessage(msg, sock, groqService) {
           "  /exportar  — Descargar conversación (.txt)",
           "  /stats  — Ver estadísticas de uso",
           "",
-          "🔍 *Búsqueda y contenido*",
+          "🔍 *Búsqueda y datos en tiempo real*",
           "  /buscar _consulta_  — Búsqueda web explícita",
+          "  /clima _ciudad_  — Clima + pronóstico 3 días",
           "  URLs  — Leo y analizo páginas automáticamente",
           "  Reply  — Cito mensajes para dar contexto",
           "  Docs  — Analizo PDF, TXT, CSV",
+          "  Datos auto: clima, sismos, festivos, países, divisas",
           "",
           "⏰ *Recordatorios*",
           "  /recordar _2h Llamar a mamá_  — Crear",
@@ -999,6 +1001,25 @@ async function handleGroqMessage(msg, sock, groqService) {
           return `  ${i + 1}. _${r.text}_ → en *${timeLabel}*`;
         });
         await _sendText(sock, jid, ["⏰ *Recordatorios activos*", "", ...lines, "", "_/recordar <tiempo> <texto> — crear nuevo_"].join("\n"));
+        return;
+      }
+
+      // /clima <ciudad> - clima directo para cualquier ciudad
+      const climaMatch = userMessage.match(/^\/clima(?:\s+(.+))?$/i);
+      if (climaMatch) {
+        const city = (climaMatch[1] || '').trim() || 'Bogota';
+        typingInterval = _startPersistentTyping(sock, jid);
+        try {
+          const { getWeatherForCity, formatWeatherResponse } = require('./freeApiTools');
+          const data = await getWeatherForCity(city);
+          _stopPersistentTyping(typingInterval);
+          typingInterval = null;
+          await _sendText(sock, jid, formatWeatherResponse(data));
+        } catch (e) {
+          _stopPersistentTyping(typingInterval);
+          typingInterval = null;
+          await _sendText(sock, jid, `No pude obtener el clima de *${city}*.\n_${e.message}_\n\nEjemplos: /clima Medellín, /clima Madrid, /clima Nueva York`);
+        }
         return;
       }
 
