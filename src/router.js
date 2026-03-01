@@ -710,7 +710,13 @@ function setupRouter(sock, groqService) {
             if (done) activeBot = 'gastos';
           } else if (activeBot === 'gastos') {
             const gastosData = await getGastosData(jid);
-            await handleGastosMessage(msg, sock, gastosData.sheet_id || null);
+            // Safety: si el estado en Supabase ya no es 'complete' (ej: 404 reseteó el sheet), cambiar modo
+            if (gastosData.onboarding_step !== 'complete' || !gastosData.sheet_id) {
+              activeBot = 'gastos_onboarding';
+              if (gastosData.onboarding_step) { await resendCurrentStep(sock, jid); } else { await startGastosOnboarding(sock, jid); }
+            } else {
+              await handleGastosMessage(msg, sock, gastosData.sheet_id);
+            }
           } else {
             // Fallback: recuperar estado desde Supabase si la memoria se perdió (restart)
             const gastosData = await getGastosData(jid);
@@ -896,12 +902,18 @@ function setupRouter(sock, groqService) {
         // Estamos en modo gastos activo
         if (userBot === 'gastos') {
           const gastosData = await getGastosData(jid);
-          if (gastosData.sheet_id) setCurrentSpreadsheetId(gastosData.sheet_id);
-          try {
-            await handleGastosMessage(msg, sock, gastosData.sheet_id);
-          } catch (err) {
-            console.error(`[Router] [USER] Gastos error jid=${jid}:`, err.message);
-            await sock.sendMessage(jid, { text: PREFIX + 'Hubo un error con el bot de finanzas. Intenta de nuevo.' });
+          // Safety: si el estado en Supabase ya no es 'complete' (ej: 404 reseteó el sheet), cambiar modo
+          if (gastosData.onboarding_step !== 'complete' || !gastosData.sheet_id) {
+            userActiveBot.set(jid, 'gastos_onboarding');
+            if (gastosData.onboarding_step) { await resendCurrentStep(sock, jid); } else { await startGastosOnboarding(sock, jid); }
+          } else {
+            if (gastosData.sheet_id) setCurrentSpreadsheetId(gastosData.sheet_id);
+            try {
+              await handleGastosMessage(msg, sock, gastosData.sheet_id);
+            } catch (err) {
+              console.error(`[Router] [USER] Gastos error jid=${jid}:`, err.message);
+              await sock.sendMessage(jid, { text: PREFIX + 'Hubo un error con el bot de finanzas. Intenta de nuevo.' });
+            }
           }
           continue;
         }
