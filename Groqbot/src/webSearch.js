@@ -1,190 +1,243 @@
-// src/webSearch.js
-// Busqueda web via DuckDuckGo Lite (sin API key)
+// Groqbot/src/webSearch.js
+// Búsqueda web con cadena de fallbacks:
+//   1. Brave Search API  (BRAVE_SEARCH_KEY en env — recomendado, 2k req/mes gratis)
+//   2. DDG Instant Answer API  (sin key, respuestas directas/Wikipedia)
+//   3. SearXNG público  (sin key, rotación de instancias)
+//   4. DuckDuckGo HTML scraping  (último recurso)
 
+const TIMEOUT_MS = 10000;
 const MAX_RESULTS = 5;
-const SEARCH_TIMEOUT_MS = 12000;
 
-const BROWSER_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
-  "Accept-Encoding": "identity",
+// ──────────────────────────────────────────────
+// 1. Brave Search API  (mejor calidad, requiere key gratuita)
+//    https://brave.com/search/api/  → plan gratuito: 2000 req/mes
+// ──────────────────────────────────────────────
+async function searchBrave(query) {
+  const key = process.env.BRAVE_SEARCH_KEY;
+  if (!key) throw new Error('BRAVE_SEARCH_KEY no configurada');
+
+  const url = 'https://api.search.brave.com/res/v1/web/search?' +
+    new URLSearchParams({ q: query, count: MAX_RESULTS, text_decorations: '0', search_lang: 'es', country: 'CO' });
+
+  const res = await fetch(url, {
+    headers: { 'X-Subscription-Token': key, 'Accept': 'application/json' },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`Brave HTTP ${res.status}`);
+  const data = await res.json();
+  const items = data.web?.results || [];
+  if (!items.length) throw new Error('Brave: sin resultados');
+
+  return items.map(r => ({ title: r.title, snippet: r.description || '', url: r.url }));
+}
+
+// ──────────────────────────────────────────────
+// 2. DuckDuckGo Instant Answer API  (sin key, bueno para respuestas directas)
+// ──────────────────────────────────────────────
+async function searchDDGInstant(query) {
+  const url = 'https://api.duckduckgo.com/?' +
+    new URLSearchParams({ q: query, format: 'json', no_html: '1', skip_disambig: '1', no_redirect: '1' });
+
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Bot/1.0)' },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`DDG IA HTTP ${res.status}`);
+  const data = await res.json();
+
+  const results = [];
+
+  // Respuesta directa
+  if (data.Answer) {
+    results.push({ title: 'Respuesta directa', snippet: data.Answer, url: data.AbstractURL || '' });
+  }
+  // Resumen principal
+  if (data.AbstractText) {
+    results.push({ title: data.AbstractSource || 'Fuente', snippet: data.AbstractText, url: data.AbstractURL || '' });
+  }
+  // Temas relacionados
+  for (const t of (data.RelatedTopics || [])) {
+    if (results.length >= MAX_RESULTS) break;
+    if (t.Text && t.FirstURL) {
+      results.push({ title: t.Text.split(' - ')[0] || t.Text, snippet: t.Text, url: t.FirstURL });
+    }
+  }
+
+  if (!results.length) throw new Error('DDG IA: sin resultados');
+  return results;
+}
+
+// ──────────────────────────────────────────────
+// 3. SearXNG público  (sin key, JSON API)
+//    Rota entre varias instancias para evitar bloqueos
+// ──────────────────────────────────────────────
+const SEARXNG_INSTANCES = [
+  'https://searx.be',
+  'https://search.disroot.org',
+  'https://paulgo.io',
+  'https://searx.tiekoetter.com',
+  'https://searxng.site',
+];
+
+async function searchSearXNG(query) {
+  const errors = [];
+  for (const base of SEARXNG_INSTANCES) {
+    try {
+      const url = `${base}/search?` + new URLSearchParams({ q: query, format: 'json', language: 'es-CO', safesearch: '0' });
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Bot/1.0)', 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const items = (data.results || []).slice(0, MAX_RESULTS);
+      if (!items.length) throw new Error('sin resultados');
+      console.log(`[WebSearch] SearXNG (${base}): ${items.length} resultados`);
+      return items.map(r => ({ title: r.title, snippet: r.content || '', url: r.url }));
+    } catch (e) {
+      errors.push(`${base}: ${e.message}`);
+    }
+  }
+  throw new Error('SearXNG: todos fallaron — ' + errors.join(' | '));
+}
+
+// ──────────────────────────────────────────────
+// 4. DuckDuckGo HTML scraping  (último recurso)
+// ──────────────────────────────────────────────
+const DDG_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml',
+  'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8',
+  'Accept-Encoding': 'identity',
+  'Cache-Control': 'no-cache',
 };
 
-/**
- * Busca en DuckDuckGo HTML lite (principal).
- */
-async function searchDDGLite(query) {
-  const url = "https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(query);
+async function searchDDGScrape(query) {
+  // Intentar con DDG HTML
+  const url = 'https://html.duckduckgo.com/html/?' + new URLSearchParams({ q: query, kl: 'co-es' });
+  const res = await fetch(url, { headers: DDG_HEADERS, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  if (!res.ok) throw new Error(`DDG HTML ${res.status}`);
+  const html = await res.text();
 
-  const response = await fetch(url, {
-    headers: BROWSER_HEADERS,
-    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    throw new Error("DDG HTTP " + response.status);
-  }
-
-  const html = await response.text();
   const results = [];
 
-  // DDG Lite: <a rel="nofollow" href="..." class='result-link'>Title</a>
-  const linkMatches = html.matchAll(/<a[^>]*href=['"]([^'"]+)['"][^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/g);
-  for (const match of linkMatches) {
+  // Patrón actualizado para DDG HTML 2024+
+  // Los resultados están en <div class="result__body">
+  const bodyMatches = html.matchAll(/<div[^>]*class="[^"]*result__body[^"]*"[^>]*>([\s\S]*?)<\/div>/g);
+  for (const bm of bodyMatches) {
     if (results.length >= MAX_RESULTS) break;
-    let linkUrl = match[1];
-    const title = match[2].replace(/<[^>]+>/g, "").trim();
+    const block = bm[1];
 
-    // Filtrar ads
-    if (linkUrl.includes("duckduckgo.com/y.js") || linkUrl.includes("ad_provider")) continue;
+    // Extraer title + URL
+    const aMatch = block.match(/<a[^>]*class="[^"]*result__a[^"]*"[^>]*href=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/a>/);
+    if (!aMatch) continue;
+    let linkUrl = aMatch[1];
+    const title = aMatch[2].replace(/<[^>]+>/g, '').trim();
 
-    // Extraer URL real del redirect /l/?uddg=
-    const uddgMatch = linkUrl.match(/uddg=([^&]+)/);
-    if (uddgMatch) {
-      linkUrl = decodeURIComponent(uddgMatch[1]);
-    } else if (linkUrl.startsWith("//")) {
-      linkUrl = "https:" + linkUrl;
-    }
+    // Decodificar redirect DDG
+    const uddg = linkUrl.match(/uddg=([^&]+)/);
+    if (uddg) linkUrl = decodeURIComponent(uddg[1]);
+    if (!linkUrl.startsWith('http')) continue;
 
-    // Buscar snippet en el td posterior
-    const linkPos = html.indexOf(match[0]);
-    const afterLink = html.substring(linkPos + match[0].length, linkPos + match[0].length + 1000);
-    const snippetMatch = afterLink.match(/<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/);
-    const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, "").trim() : "";
+    // Snippet
+    const snipMatch = block.match(/<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/);
+    const snippet = snipMatch ? snipMatch[1].replace(/<[^>]+>/g, '').trim() : '';
 
-    if (title && linkUrl && linkUrl.startsWith("http")) {
-      results.push({ title, snippet: snippet.substring(0, 300), url: linkUrl });
-    }
+    if (title) results.push({ title, snippet: snippet.substring(0, 300), url: linkUrl });
   }
 
-  return results;
-}
-
-/**
- * Busca en DuckDuckGo HTML normal como fallback.
- */
-async function searchDDGHtml(query) {
-  const url = "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query);
-
-  const response = await fetch(url, {
-    headers: BROWSER_HEADERS,
-    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    throw new Error("DDG HTML HTTP " + response.status);
-  }
-
-  const html = await response.text();
-  const results = [];
-
-  // DDG HTML: <a class="result__a" href="...">Title</a>
-  const linkMatches = html.matchAll(/<a[^>]*class=['"]result__a['"][^>]*href=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/a>/g);
-  for (const match of linkMatches) {
-    if (results.length >= MAX_RESULTS) break;
-    let linkUrl = match[1];
-    const title = match[2].replace(/<[^>]+>/g, "").trim();
-
-    // Extraer URL real del redirect
-    const uddgMatch = linkUrl.match(/uddg=([^&]+)/);
-    if (uddgMatch) {
-      linkUrl = decodeURIComponent(uddgMatch[1]);
-    }
-
-    // Buscar snippet
-    const linkPos = html.indexOf(match[0]);
-    const afterLink = html.substring(linkPos, linkPos + 2000);
-    const snippetMatch = afterLink.match(/<a[^>]*class=['"]result__snippet['"][^>]*>([\s\S]*?)<\/a>/);
-    const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-
-    if (title && linkUrl && linkUrl.startsWith("http")) {
-      results.push({ title, snippet: snippet.substring(0, 300), url: linkUrl });
-    }
-  }
-
-  // Fallback: href before class pattern
-  if (results.length === 0) {
-    const altMatches = html.matchAll(/<a[^>]*href=['"]([^'"]+)['"][^>]*class=['"]result__a['"][^>]*>([\s\S]*?)<\/a>/g);
-    for (const match of altMatches) {
+  // Fallback: buscar cualquier result__a
+  if (!results.length) {
+    const linkMatches = html.matchAll(/<a[^>]*class=['"]result__a['"][^>]*href=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/a>/g);
+    for (const m of linkMatches) {
       if (results.length >= MAX_RESULTS) break;
-      let linkUrl = match[1];
-      const title = match[2].replace(/<[^>]+>/g, "").trim();
-      const uddgMatch = linkUrl.match(/uddg=([^&]+)/);
-      if (uddgMatch) linkUrl = decodeURIComponent(uddgMatch[1]);
-      if (title && linkUrl && linkUrl.startsWith("http")) {
-        results.push({ title, snippet: "", url: linkUrl });
-      }
+      let linkUrl = m[1];
+      const title = m[2].replace(/<[^>]+>/g, '').trim();
+      const uddg = linkUrl.match(/uddg=([^&]+)/);
+      if (uddg) linkUrl = decodeURIComponent(uddg[1]);
+      if (title && linkUrl.startsWith('http')) results.push({ title, snippet: '', url: linkUrl });
     }
   }
 
+  if (!results.length) throw new Error('DDG scraping: sin resultados');
   return results;
 }
 
-/**
- * Busca en internet y retorna resultados formateados.
- * DDG Lite primero, DDG HTML como fallback.
- * @param {string} query
- * @returns {string} Resultados formateados para el modelo
- */
+// ──────────────────────────────────────────────
+// Función principal: prueba backends en orden
+// ──────────────────────────────────────────────
 async function webSearch(query) {
-  // DDG Lite (principal - mas ligero y rapido)
-  try {
-    const results = await searchDDGLite(query);
-    if (results.length > 0) {
-      console.log("[WebSearch] DDG Lite: " + results.length + " resultados");
+  if (!query || typeof query !== 'string') return 'No pude completar la búsqueda.';
+  query = query.trim().substring(0, 200);
+
+  // 1. Brave (si hay key)
+  if (process.env.BRAVE_SEARCH_KEY) {
+    try {
+      const results = await searchBrave(query);
+      console.log(`[WebSearch] Brave: ${results.length} resultados`);
       return formatResults(query, results);
+    } catch (e) {
+      console.warn('[WebSearch] Brave falló:', e.message);
     }
-  } catch (error) {
-    console.log("[WebSearch] DDG Lite fallo:", error.message);
   }
 
-  // Fallback: DDG HTML
+  // 2. DDG Instant Answer
   try {
-    const results = await searchDDGHtml(query);
-    if (results.length > 0) {
-      console.log("[WebSearch] DDG HTML: " + results.length + " resultados");
-      return formatResults(query, results);
-    }
-  } catch (error) {
-    console.log("[WebSearch] DDG HTML fallo:", error.message);
+    const results = await searchDDGInstant(query);
+    console.log(`[WebSearch] DDG IA: ${results.length} resultados`);
+    return formatResults(query, results);
+  } catch (e) {
+    console.warn('[WebSearch] DDG IA falló:', e.message);
   }
 
-  console.log("[WebSearch] Todos los backends fallaron");
-  return "No pude completar la busqueda. Responde con tu conocimiento disponible.";
+  // 3. SearXNG público
+  try {
+    const results = await searchSearXNG(query);
+    return formatResults(query, results);
+  } catch (e) {
+    console.warn('[WebSearch] SearXNG falló:', e.message);
+  }
+
+  // 4. DDG HTML scraping
+  try {
+    const results = await searchDDGScrape(query);
+    console.log(`[WebSearch] DDG scraping: ${results.length} resultados`);
+    return formatResults(query, results);
+  } catch (e) {
+    console.warn('[WebSearch] DDG scraping falló:', e.message);
+  }
+
+  console.warn('[WebSearch] Todos los backends fallaron para:', query);
+  return 'No pude completar la búsqueda en este momento. Responde con tu conocimiento disponible.';
 }
 
 function formatResults(query, results) {
-  const formatted = results.map((r, i) => {
+  const lines = results.map((r, i) => {
     const parts = [`[${i + 1}] ${r.title}`];
     if (r.snippet) parts.push(r.snippet);
-    parts.push("Fuente: " + r.url);
-    return parts.join("\n");
+    if (r.url) parts.push('Fuente: ' + r.url);
+    return parts.join('\n');
   });
-
-  return "Resultados de busqueda para: \"" + query + "\"\nFecha: " +
-    new Date().toLocaleDateString("es-CO") + "\n\n" + formatted.join("\n\n");
+  return `Resultados para: "${query}"\nFecha: ${new Date().toLocaleDateString('es-CO')}\n\n${lines.join('\n\n')}`;
 }
 
-// Definicion de la herramienta para Groq tool calling
+// Definición de la herramienta para Groq tool calling
 const WEB_SEARCH_TOOL = {
-  type: "function",
+  type: 'function',
   function: {
-    name: "web_search",
-    description:
-      "Busca informacion actual en internet. Usa esta herramienta cuando el usuario pregunte sobre: eventos recientes, noticias, precios actuales, resultados deportivos, clima, lanzamientos, personas, tendencias, o cualquier dato que pueda haber cambiado despues de diciembre 2023. Tambien usalo si no estas seguro de la respuesta.",
+    name: 'web_search',
+    description: 'Busca información actual en internet. Úsalo cuando el usuario pregunte sobre eventos recientes, noticias, precios actuales, resultados deportivos, clima, lanzamientos, personas, tendencias, o cualquier dato que pueda haber cambiado. También úsalo si no estás seguro de la respuesta.',
     parameters: {
-      type: "object",
+      type: 'object',
       properties: {
         query: {
-          type: "string",
-          description:
-            "La consulta de busqueda. Puede ser en espanol o ingles segun lo mas relevante.",
+          type: 'string',
+          description: 'La consulta de búsqueda. Puede ser en español o inglés según lo más relevante.',
         },
       },
-      required: ["query"],
+      required: ['query'],
     },
   },
 };
 
-module.exports = { webSearch, searchDDGLite, searchDDGHtml, WEB_SEARCH_TOOL };
+module.exports = { webSearch, WEB_SEARCH_TOOL };
