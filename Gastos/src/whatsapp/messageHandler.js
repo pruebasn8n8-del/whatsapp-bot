@@ -250,7 +250,8 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
 
     // --- Command: view config ---
     if (/^(config|configuraci[oó]n|ver\s+config(uraci[oó]n)?)$/.test(textLower) ||
-        /\b(mi\s+config(uraci[oó]n)?|qu[eé]\s+tengo\s+configurado|ver\s+mi\s+configuraci[oó]n|mostrar\s+configuraci[oó]n)\b/i.test(textLower)) {
+        /\b(mi\s+config(uraci[oó]n)?|qu[eé]\s+tengo\s+configurado|ver\s+mi\s+configuraci[oó]n|mostrar\s+configuraci[oó]n)\b/i.test(textLower) ||
+        (/\bconfiguraci[oó]n\b/i.test(textLower) && /\b(ver|puedo|c[oó]mo|qu[eé]|muestr|ense[ñn]|qued[oó]|est[aá]|tiene?)\b/i.test(textLower))) {
       const cfg = await getAllConfig();
       const tipoBase = cfg['Tipo Base'] || 'No configurado';
       const _fmtCfg = (v, fallback) => { const n = parseFloat(v); return !isNaN(n) && n > 0 ? formatCOP(n) : fallback; };

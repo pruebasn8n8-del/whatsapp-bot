@@ -30,8 +30,14 @@ const GASTOS_TRIGGERS = ['/gastos', '/ahorros', '/finanzas', '/presupuesto', '/c
 // Solo cuando NO está ya en modo gastos
 function _isGastosNL(t) {
   if (GASTOS_TRIGGERS.includes(t)) return false;
-  return /\b(gastos?|finanzas|ahorro|ahorros|presupuesto)\b/i.test(t) &&
-    /\b(quiero|quisiera|ver|abrir|activar|entrar|acceder|modo|mi|mis|dame|mu[eé]strame|mostrar|ir\s+a|configuraci[oó]n|resumen)\b/i.test(t);
+  // Patrón 1: keyword de finanzas + intención de ver/activar
+  if (/\b(gastos?|finanzas|ahorro|ahorros|presupuesto)\b/i.test(t) &&
+      /\b(quiero|quisiera|ver|abrir|activar|entrar|acceder|modo|mi|mis|dame|mu[eé]strame|mostrar|ir\s+a|configuraci[oó]n|resumen)\b/i.test(t)) return true;
+  // Patrón 2: "configuración" con verbo de consulta (sin necesitar keyword de finanzas)
+  // Ej: "Puedo ver cómo quedó la configuración?"
+  if (/\bconfiguraci[oó]n\b/i.test(t) &&
+      /\b(ver|puedo\s+ver|c[oó]mo|qu[eé]|muestr|ense[ñn]|qued[oó]|est[aá]|tiene?|mi|mis)\b/i.test(t)) return true;
+  return false;
 }
 
 // Estado global admin
