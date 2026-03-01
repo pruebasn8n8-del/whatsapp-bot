@@ -34,15 +34,15 @@ async function searchGif(query) {
 async function _searchGiphy(query) {
   const url =
     `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}` +
-    `&q=${encodeURIComponent(query)}&limit=25&rating=g&lang=es`;
+    `&q=${encodeURIComponent(query)}&limit=10&rating=g`;
 
   const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
   if (!res.ok) throw new Error(`GIPHY ${res.status}`);
   const data = await res.json();
   if (!data.data || data.data.length === 0) return null;
 
-  // Barajar y probar los primeros 8
-  const pool = [...data.data].sort(() => Math.random() - 0.5).slice(0, 8);
+  // Sin barajar: los primeros resultados son los más relevantes
+  const pool = data.data.slice(0, 5);
   for (const gif of pool) {
     const imgs = gif.images || {};
     // Orden de preferencia: tamaño mediano → pequeño → preview (evitar original)
