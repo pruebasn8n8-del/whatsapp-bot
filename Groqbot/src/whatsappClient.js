@@ -112,14 +112,19 @@ async function _convertToWebpSticker(buffer) {
   }
 }
 
+// Rotación de GIFs por usuario+query: 1→2→3→4→5→aleatorio
+const _gifRotation = new Map();
+
 /**
- * Busca y envía un GIF al chat.
- * Maneja timeout de descarga, límite de tamaño y fallback a Tenor.
+ * Busca y envía un GIF al chat con rotación por usuario+query.
+ * 1ª llamada → resultado #1, 2ª → #2 ... 5ª → #5, luego aleatorio entre los 5.
  * @returns {boolean} true si se envió correctamente
  */
 async function _sendGifForQuery(sock, jid, query) {
   const { searchGif, MAX_GIF_BYTES } = require('./gifSearch');
-  const result = await searchGif(query);
+  const rotKey = `${jid}:${query.toLowerCase().trim()}`;
+  const idx = _gifRotation.get(rotKey) ?? 0;
+  const result = await searchGif(query, idx);
   if (!result) {
     await _sendText(sock, jid, `No encontré GIFs para: _${query}_\n\nPrueba con otra búsqueda.`);
     return false;
@@ -142,7 +147,9 @@ async function _sendGifForQuery(sock, jid, query) {
   }
 
   await sock.sendMessage(jid, { video: gifBuffer, gifPlayback: true, caption: '' });
-  console.log(`[GIF] Enviado (${result.source}, ${Math.round(gifBuffer.length / 1024)}KB): ${query}`);
+  console.log(`[GIF] Enviado (${result.source}, idx=${idx}, ${Math.round(gifBuffer.length / 1024)}KB): ${query}`);
+  // Avanzar al siguiente: 0→1→2→3→4→5 (5 queda fijo = modo aleatorio)
+  _gifRotation.set(rotKey, idx < 4 ? idx + 1 : 5);
   return true;
 }
 
