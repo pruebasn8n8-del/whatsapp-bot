@@ -42,7 +42,7 @@ async function _searchGiphy(query) {
   if (!data.data || data.data.length === 0) return null;
 
   // Sin barajar: los primeros resultados son los más relevantes
-  const pool = data.data.slice(0, 5);
+  const pool = data.data.slice(0, 3);
   for (const gif of pool) {
     const imgs = gif.images || {};
     // Orden de preferencia: tamaño mediano → pequeño → preview (evitar original)
