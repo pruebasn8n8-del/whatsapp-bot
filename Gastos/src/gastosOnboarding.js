@@ -159,6 +159,38 @@ function msgSheetSetup() {
   ].join('\n');
 }
 
+// ==================== Detector de inputs irrelevantes ====================
+
+/**
+ * Detecta si el usuario está mandando algo completamente ajeno al onboarding.
+ * Retorna true → repetir el paso actual, false → procesar normalmente.
+ */
+function _isOffTopic(text, step) {
+  const t = text.trim().toLowerCase();
+
+  // Números solos (1-5) siempre son válidos (goals, cat, etc.)
+  if (/^\d{1,2}$/.test(t)) return false;
+  // "sí/no/yes" son respuestas válidas en varios pasos
+  if (/^(s[íi]|no|yes|nada|ninguno|ninguna)$/.test(t)) return false;
+  // Links de Google Sheets son válidos en sheet_setup
+  if (step === 'sheet_setup' && t.includes('docs.google')) return false;
+  // Señales de corrección → dejar que el flujo normal las maneje
+  if (CORRECTION_SIGNALS.some(s => t.startsWith(s) || t.includes(s))) return false;
+
+  // Muy corto sin contenido útil
+  if (t.length <= 1) return true;
+
+  // Saludos y frases sin contenido
+  if (/^(hola|hey|oye|holi|buenas?|buen[ao]s?\s*(d[íi]as?|tardes?|noches?)?|ok\??|hmm+|uh+|eh+|lol|jaja+|xd+|😊|👍|jeje+)$/
+    .test(t)) return true;
+
+  // Preguntas claramente off-topic (clima, noticias, entretenimiento, etc.)
+  if (/\b(clima|tiempo\s+en|noticias|gif\s|chiste|broma|pel[íi]cula|canci[oó]n|receta|f[úu]tbol|partido|juego|meme)\b/
+    .test(t)) return true;
+
+  return false;
+}
+
 // ==================== Flow principal ====================
 
 async function startGastosOnboarding(sock, jid) {
@@ -201,6 +233,18 @@ async function handleGastosOnboardingStep(sock, jid, text, groqService) {
       }
     }
 
+    // ── Detector de inputs irrelevantes: repetir el paso actual ──
+    // Aplica en todos los pasos excepto 'confirm' (que ya tiene su propia lógica)
+    if (step !== 'confirm' && _isOffTopic(text, step)) {
+      const stepMsg = _getStepMsg(step, data);
+      if (stepMsg) {
+        await sock.sendMessage(jid, {
+          text: PREFIX + `Continuemos con la configuración 👇\n\n${stepMsg}`,
+        });
+      }
+      return false;
+    }
+
     switch (step) {
       case 'goals': {
         const parsed = await _parseGoals(text, groqService);
@@ -227,6 +271,17 @@ async function handleGastosOnboardingStep(sock, jid, text, groqService) {
 
       case 'payday': {
         const parsed = await _parsePayday(text, groqService);
+        // Si no hay días y el usuario no dijo explícitamente que no tiene día fijo → preguntar de nuevo
+        if ((!parsed.days || parsed.days.length === 0)) {
+          const tl = text.trim().toLowerCase();
+          const saysNoFixed = /\b(no\s+tengo|irregular|variable|sin\s+fecha|no\s+hay|no\s+fijo|freelance|proyecto)\b/.test(tl);
+          if (!saysNoFixed) {
+            await sock.sendMessage(jid, {
+              text: PREFIX + 'No pude entender el día. Dime un número:\n\n• _"El día 30"_  •  _"Los días 15 y 30"_  •  _"El 1 de cada mes"_\n\nO escribe _"irregular"_ si tus ingresos no tienen fecha fija.',
+            });
+            return false;
+          }
+        }
         const newData = { ...data, payday: parsed.days || [] };
         await setGastosData(jid, { onboarding_step: 'accounts', onboarding_data: newData });
         await sock.sendMessage(jid, { text: PREFIX + msgAccounts() });

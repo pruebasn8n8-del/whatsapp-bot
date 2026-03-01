@@ -260,15 +260,33 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
       const base = tipoBase === 'saldo' ? 'Saldo bancario' : tipoBase === 'salario' ? 'Salario' : 'No configurado';
 
       const divider = '─'.repeat(25);
-      await _reply(sock, jid, msg,
-        `*Configuracion*\n${divider}\n\n` +
-        `  Salario:  ${salario}\n` +
-        `  Saldo Inicial:  ${saldoVal}\n` +
-        `  Base de calculo:  ${base}\n` +
-        `  Meta de Ahorro:  ${meta}\n\n` +
-        `${divider}\n` +
-        `Escribe */ayuda* para ver todos los comandos`
-      );
+      const nothingConfigured = salario === 'No configurado' && saldoVal === 'No configurado' && meta === 'No configurada';
+
+      if (nothingConfigured) {
+        await _reply(sock, jid, msg,
+          `*Configuracion*\n${divider}\n\n` +
+          `  Salario:  No configurado\n` +
+          `  Saldo Inicial:  No configurado\n` +
+          `  Meta de Ahorro:  No configurada\n\n` +
+          `${divider}\n` +
+          `_Aún no has configurado tus valores financieros._\n\n` +
+          `Puedes configurarlos directamente:\n` +
+          `  • _salario 5M_ — salario mensual\n` +
+          `  • _saldo 2.5M_ — saldo bancario actual\n` +
+          `  • _meta ahorro 500k_ — meta de ahorro mensual\n\n` +
+          `O escribe */resetgastos* para reconfigurar todo desde cero.`
+        );
+      } else {
+        await _reply(sock, jid, msg,
+          `*Configuracion*\n${divider}\n\n` +
+          `  Salario:  ${salario}\n` +
+          `  Saldo Inicial:  ${saldoVal}\n` +
+          `  Base de calculo:  ${base}\n` +
+          `  Meta de Ahorro:  ${meta}\n\n` +
+          `${divider}\n` +
+          `Escribe */ayuda* para ver todos los comandos`
+        );
+      }
       return;
     }
 
