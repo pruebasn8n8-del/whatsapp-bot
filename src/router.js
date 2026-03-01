@@ -22,9 +22,74 @@ const { CRYPTO_EMOJI, FX_EMOJI, FX_NAME } = require('../DailyBriefing/src/briefi
 const { getGastosData, setGastosData, resetAllGastosData, resetGastosData } = require('./gastosDb');
 const { startGastosOnboarding, handleGastosOnboardingStep, resendCurrentStep } = require('../Gastos/src/gastosOnboarding');
 const { setCurrentSpreadsheetId } = require('../Gastos/src/sheets/sheetsClient');
+const { getFinancialSummary } = require('../Gastos/src/sheets/financialSummary');
 
 // Palabras clave opcionales que inician el onboarding de gastos o muestran estado
 const GASTOS_TRIGGERS = ['/gastos', '/ahorros', '/finanzas', '/presupuesto', '/cuentas', '/dinero', '/plata'];
+
+/**
+ * Construye el contexto financiero del usuario a partir de gastosData.config (Supabase).
+ * No hace llamadas a la API de Sheets — usa datos ya cargados.
+ */
+function _buildFinancialCtx(gastosData) {
+  const cfg = gastosData.config || {};
+  if (!cfg.salary && !cfg.accounts?.length && !cfg.savings_goal) return null;
+
+  const fmtCOP = (n) => {
+    const num = parseFloat(n);
+    if (!num || isNaN(num)) return null;
+    return '$' + Math.round(num).toLocaleString('es-CO');
+  };
+  const freqMap = { monthly: 'mensual', biweekly: 'quincenal', weekly: 'semanal', daily: 'diario' };
+  const goalMap = {
+    control_gastos: 'Control de gastos', ahorro: 'Ahorro', metas: 'Metas financieras',
+    inversion: 'Inversión', presupuesto: 'Presupuesto',
+  };
+
+  const lines = ['[PERFIL FINANCIERO DEL USUARIO — usa estos datos para cualquier análisis o cálculo financiero]'];
+  if (cfg.salary) {
+    const s = fmtCOP(cfg.salary);
+    if (s) lines.push(`• Ingreso: ${s} (${freqMap[cfg.salary_frequency] || 'mensual'})`);
+  }
+  if (cfg.savings_goal) {
+    const m = fmtCOP(cfg.savings_goal);
+    if (m) {
+      const pct = cfg.salary ? ` (${Math.round((cfg.savings_goal / cfg.salary) * 100)}% del ingreso)` : '';
+      lines.push(`• Meta de ahorro: ${m}${pct}`);
+    }
+  }
+  if (cfg.accounts?.length) {
+    const total = cfg.accounts.reduce((s, a) => s + (parseFloat(a.balance) || 0), 0);
+    const t = fmtCOP(total);
+    if (t) lines.push(`• Saldo total en cuentas: ${t}`);
+    for (const a of cfg.accounts) {
+      const b = fmtCOP(a.balance);
+      if (b) lines.push(`  - ${a.name}: ${b}`);
+    }
+  }
+  if (cfg.crypto?.length) {
+    lines.push(`• Criptomonedas: ${cfg.crypto.map(c => `${c.amount} ${c.symbol}`).join(', ')}`);
+  }
+  if (cfg.fx_holdings?.length) {
+    lines.push(`• Divisas: ${cfg.fx_holdings.map(f => `${f.amount} ${f.currency}`).join(', ')}`);
+  }
+  if (cfg.goals?.length) {
+    lines.push(`• Objetivos financieros: ${cfg.goals.map(g => goalMap[g] || g).join(', ')}`);
+  }
+  if (cfg.payday?.length) {
+    lines.push(`• Día(s) de pago: ${cfg.payday.map(d => `día ${d}`).join(' y ')} del mes`);
+  }
+  lines.push('');
+  lines.push('Cuando el usuario haga preguntas sobre sus finanzas, usa estos datos como base. Si pregunta por sus gastos reales del mes actual, ese dato viene de su hoja de cálculo (disponible escribiendo "resumen" o "ver gastos").');
+  return lines.join('\n');
+}
+
+/**
+ * Detecta si la consulta necesita datos reales de gastos del mes (requiere llamada a Sheets).
+ */
+function _needsExpenseData(text) {
+  return /\b(cu[aá]nto\s+llevo|gastos\s+(del\s+)?(mes|actual)|este\s+mes\s+(gast|llev)|mis\s+gastos\s+reales|qu[eé]\s+he\s+gastado|cu[aá]nto\s+he\s+gastado|presupuesto\s+disponible|cu[aá]nto\s+me\s+queda\s+(del\s+mes)?|sobra\s+(del\s+mes)?|disponible\s+(del\s+mes)?|resumen\s+del\s+mes|cómo\s+van\s+mis\s+(gastos|finanzas)|an[aá]lisis\s+del\s+mes|proyecci[oó]n\s+(del\s+mes|mensual)|cu[aá]nto\s+puedo\s+gastar\s+(hoy|esta semana|por\s+día)|estoy\s+bien\s+(con\s+)?(el\s+presupuesto|mis gastos|financieramente))\b/i.test(text);
+}
 
 /**
  * Retorna true si el JID es el administrador del bot.
@@ -679,6 +744,25 @@ function setupRouter(sock, groqService) {
 
         // Groq IA — responde todo lo que gastos no procesó
         await loadPersonalityIfNeeded(jid, groqService);
+
+        // Inyectar contexto financiero del usuario si tiene gastos configurado
+        if (gastosData.onboarding_step === 'complete') {
+          let finCtx = _buildFinancialCtx(gastosData);
+          if (finCtx) {
+            // Si la consulta parece pedir datos reales del mes, agregar resumen de Sheets
+            if (_needsExpenseData(text)) {
+              try {
+                setCurrentSpreadsheetId(gastosData.sheet_id);
+                const monthlySummary = await getFinancialSummary();
+                finCtx += '\n\n[DATOS REALES DEL MES ACTUAL (desde la hoja de cálculo)]\n' + monthlySummary;
+              } catch (e) {
+                console.warn('[Router] No se pudo obtener resumen mensual para Groq:', e.message);
+              }
+            }
+            groqService.setFinancialContext(jid, finCtx);
+          }
+        }
+
         console.log(`[Router] → Groq jid=${jid}`);
         try {
           await handleGroqMessage(msg, sock, groqService);

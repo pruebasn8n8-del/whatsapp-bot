@@ -292,6 +292,8 @@ class GroqService {
     this.customPrompts = new Map();
     // Map<userId, string> - modelo per-chat
     this.chatModels = new Map();
+    // Map<userId, string> - contexto financiero por usuario (gastos bot)
+    this.financialContexts = new Map();
     // Stats globales
     this.stats = { messages: 0, searches: 0, images: 0, audios: 0, urls: 0, documents: 0 };
 
@@ -344,6 +346,9 @@ class GroqService {
   getModel(userId) { return this.chatModels.get(userId) || this.model; }
   setModel(userId, modelId) { this.chatModels.set(userId, modelId); }
   resetModel(userId) { this.chatModels.delete(userId); }
+
+  setFinancialContext(userId, ctx) { this.financialContexts.set(userId, ctx); }
+  clearFinancialContext(userId) { this.financialContexts.delete(userId); }
 
   // ============================================
   // Chain of Thought - Razonamiento previo para consultas complejas
@@ -587,6 +592,11 @@ class GroqService {
 
     if (proactiveResults) {
       systemPrompt += "\n\n[INFORMACION ACTUALIZADA DE INTERNET - Usa estos datos como fuente principal para tu respuesta]:\n" + proactiveResults;
+    }
+
+    const finCtx = this.financialContexts.get(userId);
+    if (finCtx) {
+      systemPrompt += "\n\n" + finCtx;
     }
 
     const messages = [

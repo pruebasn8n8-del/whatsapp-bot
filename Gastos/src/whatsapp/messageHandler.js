@@ -241,8 +241,9 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
     }
 
     // --- Command: financial summary ---
-    if (/^(resumen|resumen\s+financiero?)$/.test(textLower) ||
-        /\b(dame\s+(el\s+)?resumen|cu[aá]nto\s+he\s+gastado|c[oó]mo\s+van\s+(mis\s+)?gastos|mis\s+gastos\s+del\s+mes|an[aá]lisis\s+financiero?|informe\s+financiero?|ver\s+resumen|muestra\s+(el\s+)?resumen)\b/i.test(textLower)) {
+    if (/^(resumen|resumen\s+financiero?|mis\s+finanzas|estado\s+financiero?)$/.test(textLower) ||
+        /\b(dame\s+(el\s+)?resumen|cu[aá]nto\s+he\s+gastado|c[oó]mo\s+van\s+(mis\s+)?gastos|mis\s+gastos\s+del\s+mes|an[aá]lisis\s+financiero?|informe\s+financiero?|ver\s+resumen|muestra\s+(el\s+)?resumen)\b/i.test(textLower) ||
+        /\b(cu[aá]nto\s+llevo\s+(gastado|de\s+gastos)?|cu[aá]nto\s+me\s+queda\s+(del\s+mes|este\s+mes)?|presupuesto\s+disponible|presupuesto\s+del\s+mes|cu[aá]nto\s+puedo\s+gastar|gastos\s+de\s+este\s+mes|c[oó]mo\s+van\s+mis\s+finanzas|cu[aá]l\s+es\s+mi\s+situaci[oó]n\s+financiera|estoy\s+bien\s+(con\s+)?(el\s+)?presupuesto|voy\s+bien\s+(financieramente|con\s+(el\s+)?(dinero|plata|presupuesto))|proyecci[oó]n\s+(del\s+mes|mensual)|d[ií]as?\s+restantes|cu[aá]nto\s+sobra|qu[eé]\s+sobra\s+del\s+mes|mis\s+gastos\s+reales|gastos\s+reales|ver\s+mis\s+finanzas|an[aá]lisis\s+del\s+mes)\b/i.test(textLower)) {
       const summary = await getFinancialSummary();
       await _reply(sock, jid, msg, summary);
       return;
