@@ -65,10 +65,10 @@ function extractMonthSuffix(text) {
  * @param {string|null} spreadsheetId - ID del spreadsheet del usuario
  */
 async function handleGastosMessage(msg, sock, spreadsheetId) {
+  const jid = msg.key.remoteJid;
   try {
     setCurrentSpreadsheetId(spreadsheetId);
 
-    const jid = msg.key.remoteJid;
     const text = getMessageText(msg);
     if (!text || text.startsWith('\u200B') || text.startsWith('\u2713') || text.startsWith('\u2753') || text.startsWith('\uD83D\uDCCB') || text.startsWith('\uD83D\uDDD1') || text.startsWith('\u270F') || text.startsWith('\uD83D\uDCCA') || text.startsWith('\u2699') || text.startsWith('\uD83D\uDCB0')) return;
 
