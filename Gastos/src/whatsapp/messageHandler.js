@@ -70,7 +70,7 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
     setCurrentSpreadsheetId(spreadsheetId);
 
     const text = getMessageText(msg);
-    if (!text || text.startsWith('\u200B') || text.startsWith('\u2713') || text.startsWith('\u2753') || text.startsWith('\uD83D\uDCCB') || text.startsWith('\uD83D\uDDD1') || text.startsWith('\u270F') || text.startsWith('\uD83D\uDCCA') || text.startsWith('\u2699') || text.startsWith('\uD83D\uDCB0')) return;
+    if (!text || text.startsWith('\u200B') || text.startsWith('\u2713') || text.startsWith('\u2753') || text.startsWith('\uD83D\uDCCB') || text.startsWith('\uD83D\uDDD1') || text.startsWith('\u270F') || text.startsWith('\uD83D\uDCCA') || text.startsWith('\u2699') || text.startsWith('\uD83D\uDCB0')) return false;
 
     const chatId = jid;
     const textLower = text.trim().toLowerCase();
@@ -657,7 +657,7 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
     // --- Parse expense (with optional month suffix) ---
     const { cleanText, targetMonth } = extractMonthSuffix(text);
     const parsed = parseExpense(cleanText);
-    if (!parsed) return;
+    if (!parsed) return false;
 
     const category = categorize(parsed.description, parsed.categoryHint);
 

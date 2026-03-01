@@ -1,5 +1,5 @@
 // src/router.js
-// Router unificado para Baileys: multi-usuario con onboarding y personalidad por contacto
+// Router unificado para Baileys: bot único con lenguaje natural, sin modos separados.
 
 const { handleGroqMessage } = require('../Groqbot/src/whatsappClient');
 const { handleGastosMessage } = require('../Gastos/src/whatsapp/messageHandler');
@@ -23,31 +23,8 @@ const { getGastosData, setGastosData, resetAllGastosData, resetGastosData } = re
 const { startGastosOnboarding, handleGastosOnboardingStep, resendCurrentStep } = require('../Gastos/src/gastosOnboarding');
 const { setCurrentSpreadsheetId } = require('../Gastos/src/sheets/sheetsClient');
 
-// Palabras clave que activan el bot de Gastos (para todos los usuarios)
+// Palabras clave opcionales que inician el onboarding de gastos o muestran estado
 const GASTOS_TRIGGERS = ['/gastos', '/ahorros', '/finanzas', '/presupuesto', '/cuentas', '/dinero', '/plata'];
-
-// Detección NL: "quiero ver mis gastos", "mi configuración de gastos", etc.
-// Solo cuando NO está ya en modo gastos
-function _isGastosNL(t) {
-  if (GASTOS_TRIGGERS.includes(t)) return false;
-  // Patrón 1: keyword de finanzas + intención de ver/activar
-  if (/\b(gastos?|finanzas|ahorro|ahorros|presupuesto)\b/i.test(t) &&
-      /\b(quiero|quisiera|ver|abrir|activar|entrar|acceder|modo|mi|mis|dame|mu[eé]strame|mostrar|ir\s+a|configuraci[oó]n|resumen)\b/i.test(t)) return true;
-  // Patrón 2: "configuración" con verbo de consulta (sin necesitar keyword de finanzas)
-  // Ej: "Puedo ver cómo quedó la configuración?"
-  if (/\bconfiguraci[oó]n\b/i.test(t) &&
-      /\b(ver|puedo\s+ver|c[oó]mo|qu[eé]|muestr|ense[ñn]|qued[oó]|est[aá]|tiene?|mi|mis)\b/i.test(t)) return true;
-  return false;
-}
-
-// Estado global admin
-let activeBot = null; // null | 'groq' | 'gastos' | 'gastos_onboarding'
-const pendingSelection = new Map(); // chatId -> timestamp
-const SELECTION_TIMEOUT_MS = 60 * 1000;
-
-// Estado por usuario externo (no persiste en reinicios, pero es ok)
-// 'gastos' | 'gastos_onboarding' | null (null = Groq por defecto)
-const userActiveBot = new Map();
 
 /**
  * Retorna true si el JID es el administrador del bot.
@@ -119,10 +96,7 @@ function setupRouter(sock, groqService) {
 
         // /resetgastos - cualquier usuario puede reiniciar su propio perfil de gastos
         if (textLower === '/resetgastos') {
-          const { resetGastosData } = require('./gastosDb');
           await resetGastosData(jid);
-          userActiveBot.delete(jid);
-          if (isAdmin(jid)) activeBot = null;
           await sock.sendMessage(jid, {
             text: PREFIX + '✅ Tu perfil de gastos fue reiniciado.\nEscribe /gastos para configurarlo de nuevo.',
           });
@@ -425,12 +399,9 @@ function setupRouter(sock, groqService) {
         }
 
         // ============================================
-        // FLUJO ADMIN - Comandos privilegiados
+        // ADMIN-ONLY COMMANDS - Solo accesibles por el admin
         // ============================================
         if (isAdmin(jid) || msg.key.fromMe) {
-          // Ignorar mensajes propios que no sean comandos si no hay bot activo
-          // (el admin puede usar el bot normalmente si activa groq)
-
           if (textLower === '/briefing off') {
             setEnabled(false, sock);
             await sock.sendMessage(jid, { text: PREFIX + '⏹️ Briefing automático *desactivado* globalmente.\nReactivar: /briefing on' });
@@ -505,56 +476,11 @@ function setupRouter(sock, groqService) {
             continue;
           }
 
-          if (textLower === '/bot') {
-            pendingSelection.set(jid, Date.now());
-            setTimeout(() => {
-              const ts = pendingSelection.get(jid);
-              if (ts && (Date.now() - ts) >= SELECTION_TIMEOUT_MS) pendingSelection.delete(jid);
-            }, SELECTION_TIMEOUT_MS);
-            const currentStatus = activeBot
-              ? `Bot activo: *${activeBot === 'groq' ? 'Groq IA' : 'Control de Gastos'}*`
-              : '_Ningun bot activo_';
-            await sendButtonMessage(sock, jid,
-              '*Selecciona un bot*',
-              currentStatus + '  |  Responde *1* o *2*',
-              [
-                { id: 'bot_groq', text: 'Groq IA', desc: 'Asistente de IA con voz, vision, GIFs y mas' },
-                { id: 'bot_gastos', text: 'Control de Gastos', desc: 'Registro y analisis de gastos en Google Sheets' },
-              ]
-            );
-            continue;
-          }
-
-          if (textLower === '/stop') {
-            pendingSelection.delete(jid);
-            if (activeBot !== 'gastos' && activeBot !== 'gastos_onboarding') {
-              await sock.sendMessage(jid, { text: PREFIX + 'Groq IA es el modo por defecto.\n\n/bot - Activar Control de Gastos' });
-              continue;
-            }
-            activeBot = null;
-            await sock.sendMessage(jid, {
-              text: PREFIX + `*Control de Gastos* desactivado\n\nGroq IA activo por defecto.\n/bot - Volver a Gastos`
-            });
-            console.log('[Router] Gastos desactivado, volviendo a Groq.');
-            continue;
-          }
-
-          if (textLower === '/status') {
-            if (activeBot === 'gastos') {
-              await sock.sendMessage(jid, { text: PREFIX + `Bot activo: *Control de Gastos*\n\n/stop - Volver a Groq IA\n/bot - Cambiar bot` });
-            } else {
-              await sock.sendMessage(jid, { text: PREFIX + 'Groq IA activo (por defecto)\n\n/bot - Activar Control de Gastos' });
-            }
-            continue;
-          }
-
           // /bloquear <numero_o_jid> [razon]
-          // Acepta: /bloquear 573108857927  o  /bloquear 150714848379046@lid
           const bloquearMatch = text.match(/^\/bloquear\s+\+?(\S+)(?:\s+(.+))?$/i);
           if (bloquearMatch) {
             const raw = bloquearMatch[1];
             const razon = bloquearMatch[2] || null;
-            // Si ya trae @ es un JID completo (ej: @lid); si no, es número de teléfono
             const targetJid = raw.includes('@') ? raw : raw + '@s.whatsapp.net';
             const display = raw.includes('@') ? raw : `+${raw}`;
             await blockContact(targetJid, razon);
@@ -592,369 +518,172 @@ function setupRouter(sock, groqService) {
             continue;
           }
 
-          // Seleccion de bot pendiente (admin)
-          if (pendingSelection.has(jid)) {
-            let selection = null;
-            if (interactive) {
-              if (interactive.id === 'bot_groq') selection = 'groq';
-              else if (interactive.id === 'bot_gastos') selection = 'gastos';
-            }
-            if (!selection && (text === '1' || text === '2')) {
-              selection = text === '1' ? 'groq' : 'gastos';
-            }
-            if (selection) {
-              pendingSelection.delete(jid);
-              const divider = '─'.repeat(25);
-              if (selection === 'groq') {
-                activeBot = 'groq';
-                await sock.sendMessage(jid, {
-                  text: PREFIX +
-                    '*Groq IA activado*\n' + divider + '\n\n' +
-                    'Escribeme, enviame un audio, una imagen, un documento o una URL.\n\n' +
-                    '*Comandos principales:*\n' +
-                    '  /ayuda  -  Ver todos los comandos\n' +
-                    '  /modelo  -  Cambiar modelo de IA\n' +
-                    '  /voz  -  Respuestas por voz\n' +
-                    '  /role  -  Cambiar personalidad\n' +
-                    '  /sticker  -  Convertir imagen a sticker\n' +
-                    '  /gif  -  Buscar y enviar GIFs\n\n' +
-                    divider + '\n_Escribe /stop para desactivar_'
-                });
-              } else {
-                // Gastos: verificar si el admin ya tiene su sheet personal
-                const gastosData = await getGastosData(jid);
-                if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
-                  activeBot = 'gastos';
-                  await sock.sendMessage(jid, {
-                    text: PREFIX +
-                      '*Control de Gastos activado*\n' + divider + '\n\n' +
-                      'Registra un gasto escribiendo:\n_Almuerzo 25k_ | _Uber 15.000_ | _Netflix 20k_\n\n' +
-                      `📊 Tu hoja: ${gastosData.sheet_url}\n\n` +
-                      divider + '\n_Escribe */ayuda* para ver todos los comandos_\n_/stop para desactivar_'
-                  });
-                } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
-                  activeBot = 'gastos_onboarding';
-                  await resendCurrentStep(sock, jid);
-                } else {
-                  activeBot = 'gastos_onboarding';
-                  await startGastosOnboarding(sock, jid);
-                }
-              }
-              continue;
-            }
-          }
-
-          // /resetgastos - Reset datos de gastos (admin)
-          if (textLower === '/resetgastos' || textLower === '/resetgastos all') {
-            const resetAll = textLower === '/resetgastos all';
-            await sock.sendMessage(jid, { text: PREFIX + `⏳ Reseteando datos de gastos${resetAll ? ' de todos los usuarios' : ''}...` });
-            let ok;
-            if (resetAll) {
-              ok = await resetAllGastosData();
-            } else {
-              await resetGastosData(jid);
-              ok = true;
-            }
-            activeBot = null;
+          // /resetgastos all - solo admin puede resetear todos los usuarios
+          if (textLower === '/resetgastos all') {
+            await sock.sendMessage(jid, { text: PREFIX + '⏳ Reseteando datos de gastos de todos los usuarios...' });
+            const ok = await resetAllGastosData();
             if (ok) {
-              await sock.sendMessage(jid, {
-                text: PREFIX + [
-                  `✅ *Gastos reseteados${resetAll ? ' (todos los usuarios)' : ''}*`,
-                  '',
-                  resetAll
-                    ? 'Todos los usuarios deberán pasar por el onboarding nuevamente para crear su hoja de cálculo propia.'
-                    : 'Tu perfil de gastos fue reseteado. Usa /gastos para configurar de nuevo.',
-                  '',
-                  '_Groq IA activo por defecto._',
-                ].join('\n')
-              });
+              await sock.sendMessage(jid, { text: PREFIX + '✅ *Gastos reseteados (todos los usuarios)*\n\nTodos deberán pasar por el onboarding nuevamente.' });
             } else {
               await sock.sendMessage(jid, { text: PREFIX + 'Error al resetear. Revisa los logs.' });
             }
             continue;
           }
 
-          // Trigger words de gastos para el admin - usa sheet propio (igual que usuarios externos)
-          if (GASTOS_TRIGGERS.includes(textLower)) {
-            const gastosData = await getGastosData(jid);
-            if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
-              activeBot = 'gastos';
-              const divider = '─'.repeat(25);
-              await sock.sendMessage(jid, {
-                text: PREFIX + `💰 *Control de Gastos activado*\n${divider}\n\nRegistra un gasto:\n_Almuerzo 25k_ | _Uber 15.000_ | _Netflix 20k_\n\n📊 Tu hoja: ${gastosData.sheet_url}\n\n${divider}\n_Escribe */ayuda* para ver todos los comandos_\n_/stop para desactivar_`
-              });
-            } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
-              activeBot = 'gastos_onboarding';
-              await resendCurrentStep(sock, jid);
-            } else {
-              activeBot = 'gastos_onboarding';
-              await startGastosOnboarding(sock, jid);
-            }
-            continue;
-          }
-
-          // NL trigger gastos: "quiero ver mis gastos", "mi configuración de gastos", etc.
-          // Activa el modo silenciosamente y procesa el mensaje directo (sin welcome)
-          if (activeBot !== 'gastos' && activeBot !== 'gastos_onboarding' && _isGastosNL(textLower)) {
-            const gastosData = await getGastosData(jid);
-            if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
-              activeBot = 'gastos';
-              await handleGastosMessage(msg, sock, gastosData.sheet_id);
-            } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
-              activeBot = 'gastos_onboarding';
-              await resendCurrentStep(sock, jid);
-            } else {
-              activeBot = 'gastos_onboarding';
-              await startGastosOnboarding(sock, jid);
-            }
-            continue;
-          }
-
-          // Delegar: Gastos (con sheet propio), Onboarding, o Groq por defecto
-          if (activeBot === 'gastos_onboarding') {
-            const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
-            if (done) activeBot = 'gastos';
-          } else if (activeBot === 'gastos') {
-            const gastosData = await getGastosData(jid);
-            // Safety: si el estado en Supabase ya no es 'complete' (ej: 404 reseteó el sheet)
-            if (gastosData.onboarding_step !== 'complete' || !gastosData.sheet_id) {
-              activeBot = 'gastos_onboarding';
-              // Procesar el mensaje en el paso actual (no solo reenviar)
-              const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
-              if (done) activeBot = 'gastos';
-            } else {
-              await handleGastosMessage(msg, sock, gastosData.sheet_id);
-            }
-          } else {
-            // Fallback: recuperar estado desde Supabase si la memoria se perdió (restart)
-            const gastosData = await getGastosData(jid);
-            if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
-              activeBot = 'gastos_onboarding';
-              const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
-              if (done) activeBot = 'gastos';
-            } else if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
-              activeBot = 'gastos';
-              await handleGastosMessage(msg, sock, gastosData.sheet_id);
-            } else {
-              await handleGroqMessage(msg, sock, groqService);
-            }
-          }
-          continue;
+          // Comandos admin no reconocidos → caen al flujo unificado
         }
 
         // ============================================
-        // FILTRO: LISTA NEGRA Y NÚMEROS +58
+        // FILTRO: LISTA NEGRA Y NÚMEROS +58 (no admin)
         // ============================================
-
-        // phoneNumber: para JIDs @s.whatsapp.net es el número real; para @lid es opaco
-        const phoneNumber = jid.split(':')[0].split('@')[0];
-        // +58 solo aplica si el JID es @s.whatsapp.net (número real conocido)
-        const isVenezuelan = jid.endsWith('@s.whatsapp.net') && phoneNumber.startsWith('58');
-        // Revisar lista negra tanto por JID real (@s.whatsapp.net) como por @lid
-        const blocked = await isBlocked(jid);
-
-        if (isVenezuelan || blocked) {
-          const warningMsg =
-            '🚨 *AVISO OFICIAL* 🚨\n\n' +
-            'Este número ha sido identificado, reportado y está siendo monitoreado ' +
-            'por las autoridades competentes.\n\n' +
-            'Toda comunicación queda registrada y será entregada a los organismos ' +
-            'de seguridad correspondientes.\n\n' +
-            'Le recomendamos abstenerse de continuar contactando este número.\n\n' +
-            '_Este es un aviso automatizado. No responda a este mensaje._';
-          await sock.sendMessage(jid, { text: warningMsg });
-          console.log(`[Router] [BLOQUEADO] jid=${jid} (${isVenezuelan ? '+58 Venezuela' : 'lista negra'})`);
-          continue;
-        }
-
-        // ============================================
-        // FLUJO USUARIOS EXTERNOS - Groq IA multi-usuario
-        // ============================================
-
-        // /noticia <num> también disponible para usuarios externos (usando la misma caché)
-        const noticiaExtMatch = text.match(/^\/noticia\s+(\d+)$/i);
-        if (noticiaExtMatch) {
-          const num = parseInt(noticiaExtMatch[1]);
-          const news = getLastNews();
-          if (news.length === 0) {
-            await sock.sendMessage(jid, { text: PREFIX + 'No hay noticias cargadas. Escribe /noticias primero.' });
+        if (!isAdmin(jid)) {
+          const phoneNumber = jid.split(':')[0].split('@')[0];
+          const isVenezuelan = jid.endsWith('@s.whatsapp.net') && phoneNumber.startsWith('58');
+          const blocked = await isBlocked(jid);
+          if (isVenezuelan || blocked) {
+            const warningMsg =
+              '🚨 *AVISO OFICIAL* 🚨\n\n' +
+              'Este número ha sido identificado, reportado y está siendo monitoreado ' +
+              'por las autoridades competentes.\n\n' +
+              'Toda comunicación queda registrada y será entregada a los organismos ' +
+              'de seguridad correspondientes.\n\n' +
+              'Le recomendamos abstenerse de continuar contactando este número.\n\n' +
+              '_Este es un aviso automatizado. No responda a este mensaje._';
+            await sock.sendMessage(jid, { text: warningMsg });
+            console.log(`[Router] [BLOQUEADO] jid=${jid} (${isVenezuelan ? '+58 Venezuela' : 'lista negra'})`);
             continue;
           }
-          if (num < 1 || num > news.length) {
-            await sock.sendMessage(jid, { text: PREFIX + `Número inválido. Hay ${news.length} noticias (1-${news.length}).` });
-            continue;
-          }
-          await sock.sendPresenceUpdate('composing', jid);
-          const n = news[num - 1];
-          let articleUrl = '';
-          let summary = '';
-          try {
-            const { searchResult, content } = await _findAndFetchArticle(n.title, n.source);
-            articleUrl = searchResult?.url || '';
-            if (content) summary = await _summarizeWithAI(groqService, n.title, content);
-          } catch (e) {
-            console.log('[Router] Error buscando artículo:', e.message);
-          }
-          const divider = '─'.repeat(25);
-          const lines = [`📰 *${n.title}*`, divider];
-          if (n.source) lines.push(`📌 _${n.source}_`);
-          if (summary) lines.push('', summary);
-          if (articleUrl) lines.push('', `🔗 ${articleUrl}`);
-          lines.push('', divider);
-          const nav = [];
-          if (num > 1) nav.push(`/noticia ${num - 1} ← ant`);
-          if (num < news.length) nav.push(`/noticia ${num + 1} → sig`);
-          if (nav.length > 0) lines.push(nav.join('  |  '));
-          await sock.sendMessage(jid, { text: PREFIX + lines.join('\n') });
-          continue;
         }
 
-        // Comando /miperfil - cambiar personalidad (disponible para todos)
+        // /noticia N - para usuarios externos (admin ya lo manejó arriba)
+        if (!isAdmin(jid)) {
+          const noticiaExtMatch = text.match(/^\/noticia\s+(\d+)$/i);
+          if (noticiaExtMatch) {
+            const num = parseInt(noticiaExtMatch[1]);
+            const news = getLastNews();
+            if (news.length === 0) {
+              await sock.sendMessage(jid, { text: PREFIX + 'No hay noticias cargadas. Escribe /noticias primero.' });
+              continue;
+            }
+            if (num < 1 || num > news.length) {
+              await sock.sendMessage(jid, { text: PREFIX + `Número inválido. Hay ${news.length} noticias (1-${news.length}).` });
+              continue;
+            }
+            await sock.sendPresenceUpdate('composing', jid);
+            const n = news[num - 1];
+            let articleUrl = '';
+            let summary = '';
+            try {
+              const { searchResult, content } = await _findAndFetchArticle(n.title, n.source);
+              articleUrl = searchResult?.url || '';
+              if (content) summary = await _summarizeWithAI(groqService, n.title, content);
+            } catch (e) {
+              console.log('[Router] Error buscando artículo:', e.message);
+            }
+            const divider = '─'.repeat(25);
+            const lines = [`📰 *${n.title}*`, divider];
+            if (n.source) lines.push(`📌 _${n.source}_`);
+            if (summary) lines.push('', summary);
+            if (articleUrl) lines.push('', `🔗 ${articleUrl}`);
+            lines.push('', divider);
+            const nav = [];
+            if (num > 1) nav.push(`/noticia ${num - 1} ← ant`);
+            if (num < news.length) nav.push(`/noticia ${num + 1} → sig`);
+            if (nav.length > 0) lines.push(nav.join('  |  '));
+            await sock.sendMessage(jid, { text: PREFIX + lines.join('\n') });
+            continue;
+          }
+        }
+
+        // /miperfil - cambiar personalidad (todos los usuarios)
         const miperfilMatch = text.match(/^\/miperfil\s+(.+)$/is);
         if (miperfilMatch) {
           await updatePersonality(sock, jid, miperfilMatch[1].trim(), groqService);
           continue;
         }
 
-        // Verificar estado de onboarding
+        // Onboarding de personalidad (primer contacto)
         const onboardingState = await getOnboardingState(jid);
-        console.log(`[Router] [USER] onboarding=${onboardingState} jid=${jid}`);
-
+        console.log(`[Router] onboarding=${onboardingState} jid=${jid}`);
         if (onboardingState === 'new') {
           await startOnboarding(sock, jid, pushName);
-          console.log(`[Router] [USER] onboarding iniciado para jid=${jid}`);
           continue;
         }
-
         if (onboardingState === 'in_progress') {
           await handleOnboardingStep(sock, jid, text, groqService);
           continue;
         }
 
-        // ============================================
-        // MODO GASTOS (usuarios externos)
-        // ============================================
-        const userBot = userActiveBot.get(jid);
-
-        // Salir de gastos
-        if (userBot && (textLower === '/salir' || textLower === '/stop')) {
-          userActiveBot.delete(jid);
-          await sock.sendMessage(jid, { text: PREFIX + '👋 Volviste al asistente de IA. Escríbeme cuando necesites algo!' });
+        // /salir y /stop — ya no hay modo que desactivar, el bot es unificado
+        if (textLower === '/salir' || textLower === '/stop') {
+          await sock.sendMessage(jid, { text: PREFIX + '¿En qué puedo ayudarte? Escríbeme lo que necesites.' });
           continue;
         }
 
-        // NL trigger gastos para externos: activa silenciosamente y procesa directo
-        if (!userBot && _isGastosNL(textLower)) {
-          const gastosData = await getGastosData(jid);
-          if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
-            userActiveBot.set(jid, 'gastos');
-            if (gastosData.sheet_id) setCurrentSpreadsheetId(gastosData.sheet_id);
-            try {
-              await handleGastosMessage(msg, sock, gastosData.sheet_id);
-            } catch (err) {
-              console.error(`[Router] [USER] Gastos NL error jid=${jid}:`, err.message);
-            }
-          } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
-            userActiveBot.set(jid, 'gastos_onboarding');
-            await resendCurrentStep(sock, jid);
-          } else {
-            userActiveBot.set(jid, 'gastos_onboarding');
-            await startGastosOnboarding(sock, jid);
-          }
-          continue;
-        }
-
-        // Trigger words para activar gastos
-        if (!userBot && GASTOS_TRIGGERS.includes(textLower)) {
-          const gastosData = await getGastosData(jid);
-
-          if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
-            // Onboarding completo → activar modo gastos
-            userActiveBot.set(jid, 'gastos');
+        // Trigger words de gastos — opcionales, inician onboarding o muestran estado
+        if (GASTOS_TRIGGERS.includes(textLower)) {
+          const gd = await getGastosData(jid);
+          if (gd.onboarding_step === 'complete' && gd.sheet_id) {
             const divider = '─'.repeat(25);
             await sock.sendMessage(jid, {
               text: PREFIX + [
-                '💰 *Modo Finanzas activado*',
+                '💰 *Tu tracker de gastos está listo*',
                 divider,
                 '',
-                'Registra un gasto escribiendo lo que gastaste:',
-                '_"Almuerzo 25k"_ | _"Transporte 15.000"_ | _"Netflix 20k"_',
+                'Escríbeme directamente (sin comandos):',
+                '  • _"Almuerzo 25k"_ — registrar gasto',
+                '  • _"ver mis gastos"_ — últimos gastos del mes',
+                '  • _"resumen"_ — análisis financiero completo',
+                '  • _"cuánto tengo"_ — estado de cuentas',
+                '  • _"ver config"_ — configuración actual',
                 '',
-                `📊 Tu hoja: ${gastosData.sheet_url || '(ver en config)'}`,
+                `📊 ${gd.sheet_url || 'Hoja de cálculo configurada'}`,
                 divider,
-                '_Escribe */ayuda* para ver todos los comandos_',
-                '_/salir → volver al asistente de IA_',
+                '_Escribe /resetgastos para reconfigurar desde cero._',
               ].join('\n'),
             });
-          } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
-            // Onboarding en progreso → retomar
-            userActiveBot.set(jid, 'gastos_onboarding');
+          } else if (gd.onboarding_step && gd.onboarding_step !== 'complete') {
             await resendCurrentStep(sock, jid);
           } else {
-            // Nuevo → iniciar onboarding
-            userActiveBot.set(jid, 'gastos_onboarding');
             await startGastosOnboarding(sock, jid);
           }
           continue;
         }
 
-        // Estamos en onboarding de gastos
-        if (userBot === 'gastos_onboarding') {
-          const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
-          if (done) {
-            userActiveBot.set(jid, 'gastos'); // Completado → cambiar a modo gastos
-          }
+        // ============================================
+        // RUTEO UNIFICADO — Gastos → Groq
+        // Si gastos está configurado, intenta procesarlo primero.
+        // Si el mensaje no es gasto ni consulta financiera, cae a Groq IA.
+        // ============================================
+        const gastosData = await getGastosData(jid);
+
+        // Onboarding de gastos en progreso → continuar setup
+        if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
+          await handleGastosOnboardingStep(sock, jid, text, groqService);
           continue;
         }
 
-        // Estamos en modo gastos activo
-        if (userBot === 'gastos') {
-          const gastosData = await getGastosData(jid);
-          // Safety: si el estado en Supabase ya no es 'complete' (ej: 404 reseteó el sheet), cambiar modo
-          if (gastosData.onboarding_step !== 'complete' || !gastosData.sheet_id) {
-            userActiveBot.set(jid, 'gastos_onboarding');
-            // Procesar el mensaje en el paso actual (no solo reenviar)
-            const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
-            if (done) userActiveBot.set(jid, 'gastos');
-          } else {
-            if (gastosData.sheet_id) setCurrentSpreadsheetId(gastosData.sheet_id);
-            try {
-              await handleGastosMessage(msg, sock, gastosData.sheet_id);
-            } catch (err) {
-              console.error(`[Router] [USER] Gastos error jid=${jid}:`, err.message);
-              await sock.sendMessage(jid, { text: PREFIX + 'Hubo un error con el bot de finanzas. Intenta de nuevo.' });
-            }
+        // Gastos configurado → intentar procesar primero
+        if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
+          setCurrentSpreadsheetId(gastosData.sheet_id);
+          let handled;
+          try {
+            handled = await handleGastosMessage(msg, sock, gastosData.sheet_id);
+          } catch (err) {
+            console.error(`[Router] Gastos error jid=${jid}:`, err.message);
+            handled = false;
           }
-          continue;
+          if (handled !== false) continue;
+          // Si no manejó → cae a Groq IA
         }
 
-        // ============================================
-        // Groq IA por defecto (con fallback a gastos si estaba mid-onboarding)
-        // ============================================
-        // Fallback: si el servidor se reinició y el usuario estaba en onboarding de gastos,
-        // recuperar estado desde Supabase
-        {
-          const gastosData = await getGastosData(jid);
-          if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
-            userActiveBot.set(jid, 'gastos_onboarding');
-            const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
-            if (done) userActiveBot.set(jid, 'gastos');
-            continue;
-          }
-          if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id && userBot === 'gastos') {
-            userActiveBot.set(jid, 'gastos');
-            await handleGastosMessage(msg, sock, gastosData.sheet_id);
-            continue;
-          }
-        }
-
+        // Groq IA — responde todo lo que gastos no procesó
         await loadPersonalityIfNeeded(jid, groqService);
-        console.log(`[Router] [USER] → Groq jid=${jid}`);
+        console.log(`[Router] → Groq jid=${jid}`);
         try {
           await handleGroqMessage(msg, sock, groqService);
-          console.log(`[Router] [USER] ← Groq OK jid=${jid}`);
         } catch (groqErr) {
-          console.error(`[Router] [USER] ← Groq ERROR jid=${jid}:`, groqErr.message);
+          console.error(`[Router] Groq ERROR jid=${jid}:`, groqErr.message);
           try { await sock.sendMessage(jid, { text: 'Hubo un error al responder. Intenta de nuevo.' }); } catch (_) {}
         }
 
@@ -966,7 +695,7 @@ function setupRouter(sock, groqService) {
 }
 
 function getActiveBot() {
-  return activeBot;
+  return null; // bot unificado — ya no hay modos separados
 }
 
 // ============================================
