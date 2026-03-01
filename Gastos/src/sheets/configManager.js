@@ -1,4 +1,4 @@
-const { getDoc, getSheetsApi } = require('./sheetsClient');
+const { getDoc, getSheetsApi, getCurrentSpreadsheetId } = require('./sheetsClient');
 const { getFormattedDate, now } = require('../utils/dateUtils');
 const config = require('../../config/default');
 const logger = require('../utils/logger');
@@ -95,13 +95,10 @@ async function applyFormat(sheet, isNew, spreadsheetId) {
 }
 
 async function getConfig(key) {
-  const sheet = await getSheet();
-  const rows = await sheet.getRows();
-  const row = rows.find(r => r.get('Clave') === key);
-  if (!row) return null;
-  const val = row.get('Valor');
-  const num = parseFloat(val);
-  return isNaN(num) ? val : num;
+  const cfg = await getAllConfig();
+  const val = cfg[key];
+  if (typeof val === 'undefined' || val === null) return null;
+  return val; // ya viene como número o string gracias a UNFORMATTED_VALUE
 }
 
 async function setConfig(key, value) {
@@ -122,15 +119,46 @@ async function setConfig(key, value) {
 }
 
 async function getAllConfig() {
-  const sheet = await getSheet();
-  const rows = await sheet.getRows();
+  // Usa la API cruda con UNFORMATTED_VALUE para evitar que celdas con formato
+  // de moneda ($5,000,000) rompan el parseFloat cuando se lean.
+  const sheetsApi = await getSheetsApi();
+  const spreadsheetId = getCurrentSpreadsheetId();
+  const title = config.sheets.configuracionTab;
+
+  let values;
+  try {
+    const res = await sheetsApi.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${title}!A:C`,
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    });
+    values = res.data.values || [];
+  } catch (e) {
+    logger.warn('[ConfigManager] getAllConfig via API falló, fallback a getRows:', e.message);
+    // Fallback: usar getRows (puede devolver valores formateados)
+    const sheet = await getSheet();
+    const rows = await sheet.getRows();
+    const result = {};
+    for (const row of rows) {
+      const key = row.get('Clave');
+      const val = row.get('Valor');
+      if (key) {
+        const clean = typeof val === 'string' ? val.replace(/[$,]/g, '') : val;
+        const num = parseFloat(clean);
+        result[key] = isNaN(num) ? val : num;
+      }
+    }
+    return result;
+  }
+
   const result = {};
-  for (const row of rows) {
-    const key = row.get('Clave');
-    const val = row.get('Valor');
-    if (key) {
-      const num = parseFloat(val);
-      result[key] = isNaN(num) ? val : num;
+  // Fila 0 = encabezado (Clave | Valor | Actualizado), empezar desde fila 1
+  for (let i = 1; i < values.length; i++) {
+    const key = values[i]?.[0];
+    const val = values[i]?.[1];
+    if (key && typeof val !== 'undefined' && val !== '') {
+      // UNFORMATTED_VALUE devuelve números como números, strings como strings
+      result[key] = val;
     }
   }
   return result;
