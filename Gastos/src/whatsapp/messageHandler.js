@@ -26,6 +26,19 @@ const lastViewedExpenses = new Map();
 // chatId -> { expense, tabName, timer } - pending edit waiting for user input
 const pendingEdits = new Map();
 
+// chatId -> { type, params, timer } - acción NL esperando confirmación del usuario
+const pendingConfirmations = new Map();
+
+const CONFIRM_YES = /^(sí|si|yes|ok|dale|listo|confirmo|confirmar|correcto|claro|adelante|hazlo|procede|venga|va|afirmativo)$/i;
+const CONFIRM_NO  = /^(no|cancelar|cancela|cancel|nope|para|stop|olvida|olvídalo|mejor\s+no|negativo)$/i;
+
+function _setPendingConf(chatId, data, sock, jid) {
+  const prev = pendingConfirmations.get(chatId);
+  if (prev) clearTimeout(prev.timer);
+  const timer = setTimeout(() => pendingConfirmations.delete(chatId), TIMEOUT_MS);
+  pendingConfirmations.set(chatId, { ...data, timer, sock, jid });
+}
+
 const categoryMenu = categories
   .map((cat, i) => `${i + 1}. ${cat.name}`)
   .join('\n');
@@ -61,6 +74,67 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
 
     const chatId = jid;
     const textLower = text.trim().toLowerCase();
+
+    // === CONFIRMACIONES PENDIENTES (lenguaje natural) ===
+    const pendingConf = pendingConfirmations.get(chatId);
+    if (pendingConf) {
+      if (CONFIRM_YES.test(textLower.trim())) {
+        clearTimeout(pendingConf.timer);
+        pendingConfirmations.delete(chatId);
+        try {
+          if (pendingConf.type === 'delete') {
+            await deleteExpense(pendingConf.expense.rowNumber, pendingConf.tabName);
+            lastViewedExpenses.delete(chatId);
+            await _reply(sock, jid, msg,
+              `Eliminado: *${pendingConf.expense.descripcion}* — ${formatCOP(pendingConf.expense.monto)} [${pendingConf.expense.categoria}]\n\n_Escribe "ver gastos" para ver la lista actualizada._`
+            );
+          } else if (pendingConf.type === 'edit_start') {
+            const { expense, tabName, num } = pendingConf;
+            const prev = pendingEdits.get(chatId);
+            if (prev) clearTimeout(prev.timer);
+            const timer = setTimeout(() => pendingEdits.delete(chatId), TIMEOUT_MS);
+            pendingEdits.set(chatId, { expense, tabName, timer });
+            await _reply(sock, jid, msg,
+              `*Editando gasto #${num}:*\n\n` +
+              `Descripcion: ${expense.descripcion}\n` +
+              `Monto: ${formatCOP(expense.monto)}\n` +
+              `Categoria: ${expense.categoria}\n\n` +
+              `¿Qué quieres cambiar?\n` +
+              `- *desc* NuevoNombre\n` +
+              `- *monto* 25000\n` +
+              `- *cat* numero (1-${categories.length})\n\n` +
+              `${categoryMenu}`
+            );
+          } else if (pendingConf.type === 'set_salary') {
+            await setConfig('Salario', pendingConf.amount);
+            await setConfig('Tipo Base', 'salario');
+            try { await updateDashboard(); } catch (_) {}
+            await _reply(sock, jid, msg, `Salario configurado: *${formatCOP(pendingConf.amount)}*`);
+          } else if (pendingConf.type === 'set_balance') {
+            await setConfig('Saldo Inicial', pendingConf.amount);
+            await setConfig('Tipo Base', 'saldo');
+            try { await updateDashboard(); } catch (_) {}
+            await _reply(sock, jid, msg, `Saldo configurado: *${formatCOP(pendingConf.amount)}*`);
+          } else if (pendingConf.type === 'set_goal') {
+            await setConfig('Meta Ahorro Mensual', pendingConf.amount);
+            try { await updateDashboard(); } catch (_) {}
+            await _reply(sock, jid, msg, `Meta de ahorro configurada: *${formatCOP(pendingConf.amount)}* mensual`);
+          }
+        } catch (e) {
+          await _reply(sock, jid, msg, 'Error ejecutando la acción: ' + e.message.substring(0, 80));
+        }
+        return;
+      }
+      if (CONFIRM_NO.test(textLower.trim())) {
+        clearTimeout(pendingConf.timer);
+        pendingConfirmations.delete(chatId);
+        await _reply(sock, jid, msg, 'Cancelado.');
+        return;
+      }
+      // No es sí/no → limpiar y procesar el mensaje normalmente
+      clearTimeout(pendingConf.timer);
+      pendingConfirmations.delete(chatId);
+    }
 
     // --- Command: set salary ---
     const salarioMatch = textLower.match(/^salario\s+(.+)$/);
@@ -167,14 +241,16 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
     }
 
     // --- Command: financial summary ---
-    if (textLower === 'resumen' || textLower === 'resumen financiero') {
+    if (/^(resumen|resumen\s+financiero?)$/.test(textLower) ||
+        /\b(dame\s+(el\s+)?resumen|cu[aá]nto\s+he\s+gastado|c[oó]mo\s+van\s+(mis\s+)?gastos|mis\s+gastos\s+del\s+mes|an[aá]lisis\s+financiero?|informe\s+financiero?|ver\s+resumen|muestra\s+(el\s+)?resumen)\b/i.test(textLower)) {
       const summary = await getFinancialSummary();
       await _reply(sock, jid, msg, summary);
       return;
     }
 
     // --- Command: view config ---
-    if (['config', 'ver config', 'configuracion', 'configuración', 'ver configuracion', 'ver configuración'].includes(textLower)) {
+    if (/^(config|configuraci[oó]n|ver\s+config(uraci[oó]n)?)$/.test(textLower) ||
+        /\b(mi\s+config(uraci[oó]n)?|qu[eé]\s+tengo\s+configurado|ver\s+mi\s+configuraci[oó]n|mostrar\s+configuraci[oó]n)\b/i.test(textLower)) {
       const cfg = await getAllConfig();
       const tipoBase = cfg['Tipo Base'] || 'No configurado';
       const salario = cfg['Salario'] ? formatCOP(cfg['Salario']) : 'No configurado';
@@ -196,7 +272,8 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
     }
 
     // --- Command: view accounts / balance ---
-    if (['cuentas', 'ver cuentas', 'mis cuentas', 'saldo', 'ver saldo', 'balance'].includes(textLower)) {
+    if (/^(cuentas|ver\s+cuentas|mis\s+cuentas|saldo|ver\s+saldo|balance)$/.test(textLower) ||
+        /\b(cu[aá]nto\s+tengo|mis\s+saldos|ver\s+mis\s+cuentas|estado\s+(de\s+)?(mis\s+)?cuentas|mis\s+finanzas|ver\s+balance)\b/i.test(textLower)) {
       const cfg = await getAllConfig();
       const lines = ['💰 *Estado de cuentas*\n'];
       let totalBalance = 0;
@@ -245,7 +322,10 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
 
     // --- Command: view expenses (with optional month) ---
     // Supports: "ver gastos", "gastos", "ver", "ver gastos [enero]", "ver gastos enero 2025"
-    const verGastosSimple = (textLower === 'ver gastos' || textLower === 'gastos' || textLower === 'ver');
+    const verGastosSimple = (
+      textLower === 'ver gastos' || textLower === 'gastos' || textLower === 'ver' ||
+      /\b(mis\s+gastos|[uú]ltimos\s+gastos|lista\s+(de\s+)?gastos|qu[eé]\s+he\s+gastado|ver\s+mis\s+gastos|mostrar\s+gastos)\b/i.test(textLower)
+    );
     const verGastosConMes = !verGastosSimple && textLower.match(/^ver gastos\s+(.+)$/);
 
     if (verGastosSimple || verGastosConMes) {
@@ -352,12 +432,112 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
       return;
     }
 
+    // === LENGUAJE NATURAL: Operaciones delicadas (piden confirmación) ===
+
+    // NL delete: "borra el gasto 3", "elimina el #2", "quita el 1"
+    const nlDeleteMatch = textLower.match(/\b(?:borra(?:r)?|elimin[ao](?:r)?|quita(?:r)?|suprim(?:e|ir)?|borrame)\s+(?:el\s+)?(?:gasto\s+#?\s*)?(\d+)/);
+    if (nlDeleteMatch && !textLower.match(/^borrar\s+\d+$/)) {
+      const num = parseInt(nlDeleteMatch[1], 10);
+      const viewed = lastViewedExpenses.get(chatId);
+      const expenses = viewed?.expenses || [];
+      if (!expenses.length) {
+        await _reply(sock, jid, msg, 'Primero dime *ver gastos* para ver la lista.');
+        return;
+      }
+      if (num < 1 || num > expenses.length) {
+        await _reply(sock, jid, msg, `El número debe ser entre 1 y ${expenses.length}.`);
+        return;
+      }
+      const expense = expenses[num - 1];
+      _setPendingConf(chatId, { type: 'delete', expense, tabName: viewed.tabName }, sock, jid);
+      await _reply(sock, jid, msg,
+        `⚠️ *¿Eliminar este gasto?*\n\n` +
+        `*${expense.descripcion}* — ${formatCOP(expense.monto)}\n` +
+        `_${expense.categoria} | ${expense.fecha}_\n\n` +
+        `Responde *sí* para confirmar o *no* para cancelar.`
+      );
+      return;
+    }
+
+    // NL edit: "edita el gasto 1", "cambia el #2", "modifica el 3"
+    const nlEditMatch = textLower.match(/\b(?:edita(?:r)?|cambia(?:r)?|modifica(?:r)?|actualiza(?:r)?)\s+(?:el\s+)?(?:gasto\s+#?\s*)?(\d+)/);
+    if (nlEditMatch && !textLower.match(/^editar\s+\d+$/)) {
+      const num = parseInt(nlEditMatch[1], 10);
+      const viewed = lastViewedExpenses.get(chatId);
+      const expenses = viewed?.expenses || [];
+      if (!expenses.length) {
+        await _reply(sock, jid, msg, 'Primero dime *ver gastos* para ver la lista.');
+        return;
+      }
+      if (num < 1 || num > expenses.length) {
+        await _reply(sock, jid, msg, `El número debe ser entre 1 y ${expenses.length}.`);
+        return;
+      }
+      const expense = expenses[num - 1];
+      _setPendingConf(chatId, { type: 'edit_start', expense, tabName: viewed.tabName, num }, sock, jid);
+      await _reply(sock, jid, msg,
+        `✏️ *¿Editar este gasto?*\n\n` +
+        `*${expense.descripcion}* — ${formatCOP(expense.monto)}\n` +
+        `_${expense.categoria} | ${expense.fecha}_\n\n` +
+        `Responde *sí* para confirmar o *no* para cancelar.`
+      );
+      return;
+    }
+
+    // NL salary: "mi salario es 5M", "gano 3 millones", "devenzo 2.5M"
+    const nlSalaryMatch = textLower.match(/\b(?:mi\s+salario\s+(?:es|son|ser[aá])\s+|mi\s+sueldo\s+(?:es|son|ser[aá])\s+|gano\s+|deveng[oa]\s+)(.+)/);
+    if (nlSalaryMatch && !textLower.match(/^salario\s+/)) {
+      const amount = parseAmount(nlSalaryMatch[1].replace(/\s*(mensual(?:es)?|al\s+mes|por\s+mes)\s*$/, '').trim());
+      if (amount) {
+        _setPendingConf(chatId, { type: 'set_salary', amount }, sock, jid);
+        await _reply(sock, jid, msg,
+          `💵 *¿Configurar salario en ${formatCOP(amount)}?*\n\nResponde *sí* para confirmar o *no* para cancelar.`
+        );
+        return;
+      }
+    }
+
+    // NL balance: "mi saldo es 2.5M", "tengo 1M en el banco", "actualiza mi saldo a 3M"
+    const nlBalanceMatch = textLower.match(/\b(?:mi\s+saldo\s+(?:es|son|ser[aá])\s+(.+)|tengo\s+(.+?)\s+en\s+(?:el\s+)?(?:banco|nequi|daviplata|efectivo|cuenta)|actualiza(?:r)?\s+(?:mi\s+)?saldo\s+(?:a|en)\s+(.+))/);
+    if (nlBalanceMatch && !textLower.match(/^saldo\s+/)) {
+      const amtStr = (nlBalanceMatch[1] || nlBalanceMatch[2] || nlBalanceMatch[3] || '').trim();
+      const amount = parseAmount(amtStr);
+      if (amount) {
+        _setPendingConf(chatId, { type: 'set_balance', amount }, sock, jid);
+        await _reply(sock, jid, msg,
+          `🏦 *¿Actualizar saldo a ${formatCOP(amount)}?*\n\nResponde *sí* para confirmar o *no* para cancelar.`
+        );
+        return;
+      }
+    }
+
+    // NL goal: "quiero ahorrar 500k al mes", "mi meta de ahorro es 1M"
+    const nlGoalMatch = textLower.match(/\b(?:quiero\s+ahorrar\s+(.+)|mi\s+meta\s+(?:de\s+ahorro\s+)?(?:es|son|ser[aá])\s+(.+)|ponme\s+(?:una\s+)?meta\s+de\s+(.+))/);
+    if (nlGoalMatch && !textLower.match(/^meta\s+ahorro\s+/)) {
+      const amtStr = (nlGoalMatch[1] || nlGoalMatch[2] || nlGoalMatch[3] || '')
+        .replace(/\s*(al\s+mes|mensual(?:es)?|por\s+mes)\s*$/, '').trim();
+      const amount = parseAmount(amtStr);
+      if (amount) {
+        _setPendingConf(chatId, { type: 'set_goal', amount }, sock, jid);
+        await _reply(sock, jid, msg,
+          `🎯 *¿Configurar meta de ahorro en ${formatCOP(amount)} mensual?*\n\nResponde *sí* para confirmar o *no* para cancelar.`
+        );
+        return;
+      }
+    }
+
     // --- Handle pending edit response ---
     const pendingEdit = pendingEdits.get(chatId);
     if (pendingEdit) {
-      const descMatch = text.trim().match(/^desc\s+(.+)$/i);
-      const montoMatch = text.trim().match(/^monto\s+(.+)$/i);
-      const catMatch = text.trim().match(/^cat\s+(\d+)$/i);
+      const descMatch = text.trim().match(
+        /^(?:desc\s+|(?:cambia(?:r)?\s+(?:la\s+)?(?:descripci[oó]n|nombre)(?:\s+a)?\s+)|(?:descripci[oó]n[:\s]+)|(?:nombre[:\s]+)|(?:s[eé]\s+llama(?:ba)?\s+)|(?:el\s+nombre\s+es\s+))(.+)$/i
+      );
+      const montoMatch = text.trim().match(
+        /^(?:monto\s+|(?:en\s+realidad\s+(?:fue|cost[oó]|es)\s+)|(?:el\s+(?:precio|monto|costo)\s+(?:fue|es|era)\s+)|(?:cost[oó]\s+)|(?:monto[:\s]+)|(?:precio[:\s]+))(.+)$/i
+      );
+      const catMatch = text.trim().match(
+        /^(?:cat\s+|(?:categor[ií]a\s+#?\s*)|(?:es\s+(?:de\s+)?(?:tipo|categor[ií]a)\s+)|(?:ponle\s+(?:la\s+)?categor[ií]a\s+))(\d+)$/i
+      );
 
       if (descMatch) {
         const newDesc = descMatch[1].trim();
