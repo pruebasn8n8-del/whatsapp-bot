@@ -253,9 +253,10 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
         /\b(mi\s+config(uraci[oó]n)?|qu[eé]\s+tengo\s+configurado|ver\s+mi\s+configuraci[oó]n|mostrar\s+configuraci[oó]n)\b/i.test(textLower)) {
       const cfg = await getAllConfig();
       const tipoBase = cfg['Tipo Base'] || 'No configurado';
-      const salario = cfg['Salario'] ? formatCOP(cfg['Salario']) : 'No configurado';
-      const saldoVal = cfg['Saldo Inicial'] ? formatCOP(cfg['Saldo Inicial']) : 'No configurado';
-      const meta = cfg['Meta Ahorro Mensual'] ? formatCOP(cfg['Meta Ahorro Mensual']) : 'No configurada';
+      const _fmtCfg = (v, fallback) => { const n = parseFloat(v); return !isNaN(n) && n > 0 ? formatCOP(n) : fallback; };
+      const salario = _fmtCfg(cfg['Salario'], 'No configurado');
+      const saldoVal = _fmtCfg(cfg['Saldo Inicial'], 'No configurado');
+      const meta = _fmtCfg(cfg['Meta Ahorro Mensual'], 'No configurada');
       const base = tipoBase === 'saldo' ? 'Saldo bancario' : tipoBase === 'salario' ? 'Salario' : 'No configurado';
 
       const divider = '─'.repeat(25);

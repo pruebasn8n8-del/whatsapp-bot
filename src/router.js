@@ -26,6 +26,14 @@ const { setCurrentSpreadsheetId } = require('../Gastos/src/sheets/sheetsClient')
 // Palabras clave que activan el bot de Gastos (para todos los usuarios)
 const GASTOS_TRIGGERS = ['/gastos', '/ahorros', '/finanzas', '/presupuesto', '/cuentas', '/dinero', '/plata'];
 
+// Detección NL: "quiero ver mis gastos", "mi configuración de gastos", etc.
+// Solo cuando NO está ya en modo gastos
+function _isGastosNL(t) {
+  if (GASTOS_TRIGGERS.includes(t)) return false;
+  return /\b(gastos?|finanzas|ahorro|ahorros|presupuesto)\b/i.test(t) &&
+    /\b(quiero|quisiera|ver|abrir|activar|entrar|acceder|modo|mi|mis|dame|mu[eé]strame|mostrar|ir\s+a|configuraci[oó]n|resumen)\b/i.test(t);
+}
+
 // Estado global admin
 let activeBot = null; // null | 'groq' | 'gastos' | 'gastos_onboarding'
 const pendingSelection = new Map(); // chatId -> timestamp
@@ -679,6 +687,23 @@ function setupRouter(sock, groqService) {
             continue;
           }
 
+          // NL trigger gastos: "quiero ver mis gastos", "mi configuración de gastos", etc.
+          // Activa el modo silenciosamente y procesa el mensaje directo (sin welcome)
+          if (activeBot !== 'gastos' && activeBot !== 'gastos_onboarding' && _isGastosNL(textLower)) {
+            const gastosData = await getGastosData(jid);
+            if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
+              activeBot = 'gastos';
+              await handleGastosMessage(msg, sock, gastosData.sheet_id);
+            } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
+              activeBot = 'gastos_onboarding';
+              await resendCurrentStep(sock, jid);
+            } else {
+              activeBot = 'gastos_onboarding';
+              await startGastosOnboarding(sock, jid);
+            }
+            continue;
+          }
+
           // Delegar: Gastos (con sheet propio), Onboarding, o Groq por defecto
           if (activeBot === 'gastos_onboarding') {
             const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
@@ -801,6 +826,27 @@ function setupRouter(sock, groqService) {
         if (userBot && (textLower === '/salir' || textLower === '/stop')) {
           userActiveBot.delete(jid);
           await sock.sendMessage(jid, { text: PREFIX + '👋 Volviste al asistente de IA. Escríbeme cuando necesites algo!' });
+          continue;
+        }
+
+        // NL trigger gastos para externos: activa silenciosamente y procesa directo
+        if (!userBot && _isGastosNL(textLower)) {
+          const gastosData = await getGastosData(jid);
+          if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
+            userActiveBot.set(jid, 'gastos');
+            if (gastosData.sheet_id) setCurrentSpreadsheetId(gastosData.sheet_id);
+            try {
+              await handleGastosMessage(msg, sock, gastosData.sheet_id);
+            } catch (err) {
+              console.error(`[Router] [USER] Gastos NL error jid=${jid}:`, err.message);
+            }
+          } else if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
+            userActiveBot.set(jid, 'gastos_onboarding');
+            await resendCurrentStep(sock, jid);
+          } else {
+            userActiveBot.set(jid, 'gastos_onboarding');
+            await startGastosOnboarding(sock, jid);
+          }
           continue;
         }
 
