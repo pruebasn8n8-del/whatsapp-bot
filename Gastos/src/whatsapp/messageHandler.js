@@ -721,26 +721,20 @@ async function handleGastosMessage(msg, sock, spreadsheetId) {
     await _reply(sock, jid, msg, `*Registrado*\n${parsed.description}  -  ${formatCOP(parsed.amount)}  [${category.name}]${mesInfo}`);
   } catch (error) {
     logger.error(`Error procesando mensaje: ${error.message}`);
-    // 404 = hoja eliminada o acceso revocado → resetear y guiar al usuario
+    // 404 = hoja eliminada o acceso revocado → reiniciar onboarding completo
     const is404 = /404|not.?found|requested.?entity/i.test(error.message);
     if (is404) {
       try {
         const { setGastosData } = require('../../../src/gastosDb');
-        await setGastosData(jid, { sheet_id: null, sheet_url: null, onboarding_step: 'sheet_setup' });
-      } catch (_) {}
-      const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_CLIENT_EMAIL || '';
-      try {
-        await _reply(sock, jid, msg,
-          '❌ *No pude acceder a tu hoja de cálculo.*\n\n' +
-          'Puede que la hoja fue eliminada o le quitaste acceso al bot.\n\n' +
-          '*Para reconectar:*\n' +
-          '1️⃣ Crea o abre tu hoja en _sheets.google.com_\n' +
-          '2️⃣ Compártela con este email como *Editor*:\n' +
-          `   \`${email}\`\n` +
-          '3️⃣ Envíame el link de la hoja aquí\n\n' +
-          '_O escribe */resetgastos* para configurar todo desde cero._'
-        );
-      } catch (_) {}
+        const { startGastosOnboarding } = require('../gastosOnboarding');
+        await setGastosData(jid, { sheet_id: null, sheet_url: null, onboarding_step: null, config: {} });
+        await sock.sendMessage(jid, {
+          text: '\u200B⚠️ *Tu hoja de cálculo no fue encontrada* (fue eliminada o le quitaste acceso al bot).\n\nVamos a configurar una nueva desde cero 🔄',
+        });
+        await startGastosOnboarding(sock, jid);
+      } catch (e2) {
+        console.error('[GastosMessage] Error al reiniciar tras 404:', e2.message);
+      }
     }
   }
 }

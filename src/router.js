@@ -710,10 +710,12 @@ function setupRouter(sock, groqService) {
             if (done) activeBot = 'gastos';
           } else if (activeBot === 'gastos') {
             const gastosData = await getGastosData(jid);
-            // Safety: si el estado en Supabase ya no es 'complete' (ej: 404 reseteó el sheet), cambiar modo
+            // Safety: si el estado en Supabase ya no es 'complete' (ej: 404 reseteó el sheet)
             if (gastosData.onboarding_step !== 'complete' || !gastosData.sheet_id) {
               activeBot = 'gastos_onboarding';
-              if (gastosData.onboarding_step) { await resendCurrentStep(sock, jid); } else { await startGastosOnboarding(sock, jid); }
+              // Procesar el mensaje en el paso actual (no solo reenviar)
+              const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
+              if (done) activeBot = 'gastos';
             } else {
               await handleGastosMessage(msg, sock, gastosData.sheet_id);
             }
@@ -905,7 +907,9 @@ function setupRouter(sock, groqService) {
           // Safety: si el estado en Supabase ya no es 'complete' (ej: 404 reseteó el sheet), cambiar modo
           if (gastosData.onboarding_step !== 'complete' || !gastosData.sheet_id) {
             userActiveBot.set(jid, 'gastos_onboarding');
-            if (gastosData.onboarding_step) { await resendCurrentStep(sock, jid); } else { await startGastosOnboarding(sock, jid); }
+            // Procesar el mensaje en el paso actual (no solo reenviar)
+            const done = await handleGastosOnboardingStep(sock, jid, text, groqService);
+            if (done) userActiveBot.set(jid, 'gastos');
           } else {
             if (gastosData.sheet_id) setCurrentSpreadsheetId(gastosData.sheet_id);
             try {
