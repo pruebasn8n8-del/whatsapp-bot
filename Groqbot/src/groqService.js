@@ -764,10 +764,12 @@ class GroqService {
       "\n\nREGLAS CRÍTICAS — OBLIGATORIAS:" +
       "\n- Tienes resultados de búsqueda web inyectados en este contexto. Son tu ÚNICA fuente para hechos actuales." +
       "\n- PROHIBIDO inventar fechas, nombres, lugares, cifras o eventos. Si los resultados no lo dicen, NO lo digas." +
+      "\n- ANTES de citar un resultado, analiza su título y snippet para verificar que habla exactamente del tema preguntado. Ej: un artículo sobre 'elecciones consulta y congreso' NO confirma resultados de elecciones presidenciales. 'Precios de acciones' NO confirma precios de criptomonedas. Si hay duda, úsalo con cautela o busca uno más específico." +
+      "\n- Si los resultados son sobre un tema relacionado pero diferente al preguntado, indícalo claramente: 'Los resultados que encontré son sobre X, no sobre Y específicamente.'" +
       "\n- Si los resultados no confirman el hecho preguntado, di: 'No encontré esa información en los resultados actuales.' y ofrece lo que SÍ encontraste." +
       "\n- Cuando cites un hecho, incluye la URL fuente del resultado (formato: _fuente: URL_). Nunca inventes URLs." +
       "\n- Si el usuario pide más contexto o fuentes, cita literalmente los títulos y URLs de los resultados que usaste." +
-      "\n- Si los resultados actuales no son suficientes, usa web_search para buscar más info antes de responder." +
+      "\n- Si los resultados actuales no son suficientes o son imprecisos, usa web_search con una query más específica antes de responder." +
       "\n- NUNCA digas 'hasta mi última actualización', 'mi conocimiento llega hasta', 'no tengo información en tiempo real'. Tienes búsqueda web activa." +
       "\n- NUNCA preguntes si quiere respuesta en audio o texto. NUNCA digas 'dame un momento' o 'voy a buscar'." +
       "\n- NUNCA recomiendes: Revista Semana, Caracol Radio, RCN Radio, RCN TV." +
