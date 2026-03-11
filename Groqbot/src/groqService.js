@@ -829,7 +829,7 @@ class GroqService {
           this.client.chat.completions.create({ model: currentModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
         );
         let reply = this._sanitizeReply(final.choices[0]?.message?.content || "No pude generar respuesta con los resultados.");
-        reply = await this._auditResponse(userId, typeof userMessage === 'string' ? userMessage : '', reply, { didSearch: true, searchContext });
+        // Con resultados de búsqueda web, la respuesta ya está basada en datos reales — no auditar
         this.addToHistory(userId, "assistant", reply);
         return reply;
       }
@@ -865,7 +865,12 @@ class GroqService {
         }
       }
 
-      reply = await this._auditResponse(userId, typeof userMessage === 'string' ? userMessage : '', reply, { didSearch, searchContext });
+      // Solo auditar si NO hubo búsqueda web — cuando hay búsqueda, los datos son fuente de verdad
+      if (!didSearch) {
+        reply = await this._auditResponse(userId, typeof userMessage === 'string' ? userMessage : '', reply, { didSearch: false, searchContext: null });
+      } else {
+        console.log(`[Groq][Audit] ⏭ Saltado — respuesta basada en búsqueda web`);
+      }
       this.addToHistory(userId, "assistant", reply);
       return reply;
 
