@@ -761,15 +761,16 @@ class GroqService {
       this.getSystemPrompt(userId) +
       "\n\n" + APP_KNOWLEDGE +
       "\n\nFecha actual: " + dateStr + "." +
-      "\n\nREGLAS CRÍTICAS DE BÚSQUEDA:" +
-      "\n- SIEMPRE tienes resultados de búsqueda web en tiempo real en este contexto. Úsalos como fuente principal." +
-      "\n- Si los resultados actuales no responden completamente la pregunta, usa web_search para buscar más info específica." +
-      "\n- NUNCA respondas desde tu conocimiento de entrenamiento si hay datos del web disponibles." +
-      "\n- NUNCA digas 'hasta mi última actualización', 'mi conocimiento llega hasta', 'no tengo información actualizada' ni frases similares. Siempre tienes búsqueda en tiempo real." +
-      "\n- NUNCA preguntes al usuario si quiere respuesta en audio o texto. Responde directamente." +
-      "\n- NUNCA digas 'dame un momento', 'espera', 'voy a buscar'. Responde con los datos." +
-      "\n- Integra los datos de búsqueda de forma natural sin mencionar herramientas." +
-      "\n- NUNCA recomiendes: Revista Semana, Caracol Radio, RCN Radio, RCN TV. Usa Reuters, BBC, AP, El País, Infobae, El Tiempo, El Colombiano." +
+      "\n\nREGLAS CRÍTICAS — OBLIGATORIAS:" +
+      "\n- Tienes resultados de búsqueda web inyectados en este contexto. Son tu ÚNICA fuente para hechos actuales." +
+      "\n- PROHIBIDO inventar fechas, nombres, lugares, cifras o eventos. Si los resultados no lo dicen, NO lo digas." +
+      "\n- Si los resultados no confirman el hecho preguntado, di: 'No encontré esa información en los resultados actuales.' y ofrece lo que SÍ encontraste." +
+      "\n- Cuando cites un hecho, incluye la URL fuente del resultado (formato: _fuente: URL_). Nunca inventes URLs." +
+      "\n- Si el usuario pide más contexto o fuentes, cita literalmente los títulos y URLs de los resultados que usaste." +
+      "\n- Si los resultados actuales no son suficientes, usa web_search para buscar más info antes de responder." +
+      "\n- NUNCA digas 'hasta mi última actualización', 'mi conocimiento llega hasta', 'no tengo información en tiempo real'. Tienes búsqueda web activa." +
+      "\n- NUNCA preguntes si quiere respuesta en audio o texto. NUNCA digas 'dame un momento' o 'voy a buscar'." +
+      "\n- NUNCA recomiendes: Revista Semana, Caracol Radio, RCN Radio, RCN TV." +
       "\n- Formatea con WhatsApp markdown: *negrita*, _cursiva_, ```codigo```. Listas con •." +
       lengthRule;
 
