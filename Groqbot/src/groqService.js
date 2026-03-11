@@ -613,7 +613,7 @@ class GroqService {
     this.addToHistory(userId, "user", userMessage);
 
     const currentModel = this.getModel(userId);
-    const dateStr = new Date().toLocaleDateString("es-CO", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    const dateStr = new Date().toLocaleDateString("es-CO", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: process.env.TIMEZONE || 'America/Bogota' });
     let didSearch = false;
 
     // ---- CAPA 1A: APIs gratuitas proactivas (clima, sismos, festivos) ----

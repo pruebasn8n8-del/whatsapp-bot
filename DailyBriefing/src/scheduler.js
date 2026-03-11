@@ -36,39 +36,20 @@ function _scheduleAllJobs(sock) {
 }
 
 /**
- * Envía el briefing a todos los suscriptores para una hora dada.
- * Admin siempre recibe; usuarios externos solo si briefing_enabled y ese horario activado.
+ * Envía el briefing a todos los contactos para una hora dada.
+ * Todos los usuarios reciben si briefing_enabled (default: true) y el horario está en sus prefs.
  */
 async function _sendBriefingAtHour(sock, hour) {
   if (!_enabled) return;
 
-  const myNumber = process.env.MY_NUMBER;
   const { getPrefs, DEFAULT_PREFS } = require('../../src/prefsDb');
   const { getAllContacts } = require('../../src/contactsDb');
 
-  // Admin: siempre recibe en los 3 horarios por defecto
-  if (myNumber) {
-    const adminJid = myNumber + '@s.whatsapp.net';
-    try {
-      console.log(`[DailyBriefing] Enviando briefing al admin (${hour}:00)...`);
-      const adminPrefs = await getPrefs(adminJid);
-      const msg = await generateBriefing({ userName: sock.user?.name || '', prefs: adminPrefs });
-      await sock.sendMessage(adminJid, { text: PREFIX + msg });
-      console.log(`[DailyBriefing] Briefing enviado al admin (${hour}:00)`);
-    } catch (err) {
-      console.error('[DailyBriefing] Error enviando al admin:', err.message);
-    }
-  }
-
-  // Usuarios externos con briefing activado y ese horario configurado
   try {
     const contacts = await getAllContacts();
     let sent = 0;
 
     for (const contact of contacts) {
-      // Skip admin
-      if (myNumber && (contact.jid === myNumber + '@s.whatsapp.net' || contact.jid.startsWith(myNumber))) continue;
-
       const prefs = { ...DEFAULT_PREFS, ...(contact.preferences || {}) };
       if (!prefs.briefing_enabled) continue;
       if (!Array.isArray(prefs.briefing_times) || !prefs.briefing_times.includes(hour)) continue;
@@ -84,7 +65,7 @@ async function _sendBriefingAtHour(sock, hour) {
       }
     }
 
-    if (sent > 0) console.log(`[DailyBriefing] Briefing enviado a ${sent} usuarios externos (${hour}:00)`);
+    console.log(`[DailyBriefing] Briefing (${hour}:00) enviado a ${sent} contactos`);
   } catch (err) {
     console.error('[DailyBriefing] Error en envío masivo:', err.message);
   }

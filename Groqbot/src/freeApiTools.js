@@ -3,6 +3,17 @@
 // Usadas como tools de Groq para responder automáticamente en conversación.
 
 const API_TIMEOUT_MS = 9000;
+const TZ = process.env.TIMEZONE || 'America/Bogota';
+
+/** Retorna la fecha de hoy en Bogotá como string YYYY-MM-DD */
+function _todayBogota() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); // en-CA → YYYY-MM-DD
+}
+
+/** Retorna el año actual en Bogotá */
+function _yearBogota() {
+  return parseInt(new Date().toLocaleDateString('en-CA', { timeZone: TZ }).slice(0, 4));
+}
 
 // ============================================================
 // WMO Weather codes (compartidos con weatherService.js)
@@ -108,7 +119,7 @@ function formatWeatherResponse(data) {
   if (forecast.length > 0) {
     lines.push('', '*Pronóstico:*');
     for (const day of forecast) {
-      const isToday = day.date === new Date().toISOString().slice(0, 10);
+      const isToday = day.date === _todayBogota();
       const label = isToday ? 'Hoy' : new Date(day.date + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' });
       const em = WMO_EMOJI(day.code, true);
       const rain = day.rain > 30 ? ` ☂️ ${day.rain}%` : day.rain > 0 ? ` (${day.rain}% lluvia)` : '';
@@ -289,7 +300,7 @@ const COUNTRY_NAMES_ES = {
 };
 
 async function getPublicHolidays(countryCode = 'CO', year = null) {
-  const y = year || new Date().getFullYear();
+  const y = year || _yearBogota();
   const code = countryCode.toUpperCase();
   const url = `https://date.nager.at/api/v3/PublicHolidays/${y}/${code}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
@@ -306,7 +317,7 @@ function formatHolidaysResponse(data) {
   }
 
   // Filtrar los que vienen o son próximos
-  const today = new Date().toISOString().slice(0, 10);
+  const today = _todayBogota();
   const upcoming = holidays.filter(h => h.date >= today);
   const past = holidays.filter(h => h.date < today);
 

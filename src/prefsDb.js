@@ -5,7 +5,7 @@
 const { getContact, upsertContact } = require('./contactsDb');
 
 const DEFAULT_PREFS = {
-  briefing_enabled: false,       // opt-in (admin se maneja aparte en scheduler)
+  briefing_enabled: true,        // opt-out — todos reciben por defecto, /prefs off para desactivar
   briefing_times: [7, 13, 19],  // horas del día (24h) que coincidan con el scheduler
   show_weather: true,
   show_trm: true,
