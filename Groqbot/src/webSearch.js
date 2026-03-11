@@ -6,7 +6,7 @@
 //   4. DuckDuckGo HTML scraping  (último recurso)
 
 const TIMEOUT_MS = 10000;
-const MAX_RESULTS = 5;
+const MAX_RESULTS = 8;
 
 // ──────────────────────────────────────────────
 // 1. Brave Search API  (mejor calidad, requiere key gratuita)
@@ -77,6 +77,13 @@ const SEARXNG_INSTANCES = [
   'https://paulgo.io',
   'https://searx.tiekoetter.com',
   'https://searxng.site',
+  'https://search.ononoki.org',
+  'https://searx.lunar.icu',
+  'https://searx.namejeff.de',
+  'https://searx.foss.family',
+  'https://searxng.world',
+  'https://searx.sev.monster',
+  'https://searx.mha.fi',
 ];
 
 async function searchSearXNG(query) {

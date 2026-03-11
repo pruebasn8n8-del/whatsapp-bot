@@ -648,7 +648,25 @@ class GroqService {
   }
 
   // ============================================
-  // Chat con busqueda web inteligente (proactiva + tool calling + post-validacion)
+  // Detecta mensajes que no necesitan búsqueda web (saludos, confirmaciones, etc.)
+  // ============================================
+  _isTrivialMessage(message) {
+    if (!message || typeof message !== 'string') return true;
+    const msg = message.trim().toLowerCase().replace(/[!?.¿¡]+/g, '').trim();
+    if (msg.length < 4) return true;
+    const trivialPatterns = [
+      /^(hola|hey|hi|buenas|buenos días|buenos dias|buen día|buen dia|buenas tardes|buenas noches|qué hay|que hay|ey)$/i,
+      /^(ok|okay|vale|dale|listo|entendido|claro|sí|si|no|gracias|de nada|genial|perfecto|bien|mal|chévere|chevere)$/i,
+      /^(cómo estás|como estas|qué tal|que tal|cómo te va|como te va|cómo vas|como vas)$/i,
+      /^(jaja|jeje|jajaja|jejeje|xd)$/i,
+      /^[\d\s]+$/, // solo números o espacios
+    ];
+    return trivialPatterns.some(p => p.test(msg));
+  }
+
+  // ============================================
+  // Chat: búsqueda web en CADA mensaje + loop de tool calls
+  // La IA decide si los resultados son suficientes o necesita más búsquedas.
   // ============================================
   async chat(userId, userMessage) {
     this.stats.messages++;
@@ -659,225 +677,204 @@ class GroqService {
     this.addToHistory(userId, "user", userMessage);
 
     const currentModel = this.getModel(userId);
-    const dateStr = new Date().toLocaleDateString("es-CO", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: process.env.TIMEZONE || 'America/Bogota' });
-    let didSearch = false;
-    let searchContext = null; // guardamos los resultados de búsqueda para pasarlos al audit
+    const dateStr = new Date().toLocaleDateString("es-CO", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
+      timeZone: process.env.TIMEZONE || 'America/Bogota',
+    });
 
-    // ---- CAPA 1A: APIs gratuitas proactivas (clima, sismos, festivos) ----
-    let proactiveResults = null;
-    if (typeof userMessage === "string" && detectProactiveTool) {
-      const proactiveApi = detectProactiveTool(userMessage);
+    const msgText = typeof userMessage === 'string' ? userMessage : '';
+    const isTrivial = this._isTrivialMessage(msgText);
+    let totalSearches = 0;
+
+    // ---- Búsqueda inicial siempre que el mensaje no sea trivial ----
+    let initialSearchResults = null;
+    if (!isTrivial && webSearch) {
+      const query = msgText
+        .replace(/^(oye|hey|dime|cuéntame|explícame|sabes|sabes algo sobre)\s*/i, '')
+        .replace(/[?¿!¡]+/g, '')
+        .trim()
+        .substring(0, 200);
+      console.log(`[Groq] Búsqueda inicial: "${query.substring(0, 80)}"`);
+      this.stats.searches++;
+      totalSearches++;
+      try {
+        initialSearchResults = await webSearch(query);
+        console.log('[Groq] Búsqueda inicial completada');
+      } catch (e) {
+        console.log('[Groq] Búsqueda inicial falló:', e.message);
+      }
+    }
+
+    // ---- APIs estructuradas proactivas (clima, sismos, festivos) ----
+    let proactiveApiResults = null;
+    if (!isTrivial && detectProactiveTool) {
+      const proactiveApi = detectProactiveTool(msgText);
       if (proactiveApi) {
-        console.log("[Groq] API proactiva: " + proactiveApi.tool);
+        console.log('[Groq] API proactiva: ' + proactiveApi.tool);
         this.stats.searches++;
         try {
-          proactiveResults = await callFreeApiTool(proactiveApi.tool, proactiveApi.args);
-          didSearch = true;
-          searchContext = proactiveResults;
-          console.log("[Groq] Datos obtenidos de " + proactiveApi.tool);
+          proactiveApiResults = await callFreeApiTool(proactiveApi.tool, proactiveApi.args);
+          console.log('[Groq] Datos API proactiva obtenidos');
         } catch (e) {
-          console.log("[Groq] API proactiva fallo (" + proactiveApi.tool + "):", e.message);
+          console.log('[Groq] API proactiva falló:', e.message);
         }
       }
     }
 
-    // ---- CAPA 1B: Busqueda web proactiva (solo si no hubo API proactiva) ----
-    if (!proactiveResults && webSearch && typeof userMessage === "string") {
-      const { search, query } = this._shouldProactiveSearch(userMessage);
-      if (search) {
-        console.log("[Groq] Busqueda proactiva detectada: \"" + query.substring(0, 80) + "\"");
-        this.stats.searches++;
-        try {
-          proactiveResults = await webSearch(query);
-          didSearch = true;
-          searchContext = proactiveResults;
-          console.log("[Groq] Resultados proactivos obtenidos");
-        } catch (e) {
-          console.log("[Groq] Busqueda proactiva fallo:", e.message);
-        }
-      }
-    }
-
-    // ---- THINKING STEP: Razonamiento previo para consultas complejas ----
+    // ---- Thinking step para consultas complejas ----
     let thinkingCtx = null;
-    if (typeof userMessage === 'string' && this._shouldDeepThink(userMessage) && !proactiveResults) {
-      thinkingCtx = await this._generateThinkingContext(userMessage);
-      if (thinkingCtx) console.log('[Groq] Chain-of-thought generado para respuesta estructurada');
+    if (!isTrivial && this._shouldDeepThink(msgText)) {
+      thinkingCtx = await this._generateThinkingContext(msgText);
+      if (thinkingCtx) console.log('[Groq] Chain-of-thought generado');
     }
 
-    // ---- Longitud de respuesta preferida ----
+    // ---- Longitud de respuesta ----
     const respLen = this.getResponseLength(userId);
     const lengthRule =
       respLen === 'short'
-        ? "\n- LONGITUD: Respuestas MUY CORTAS. Máximo 2-3 oraciones o una lista breve. Solo lo esencial, sin contexto extra ni explicaciones adicionales."
+        ? "\n- LONGITUD: MUY CORTA. Máximo 2-3 oraciones. Solo lo esencial."
         : respLen === 'long'
-        ? "\n- LONGITUD: Puedes ser extenso/a cuando el tema lo justifique. Desarrolla con detalle, ejemplos y contexto si aporta valor."
-        : "\n- LONGITUD: Respuestas concisas y directas. Sin introducciones genéricas, sin relleno. Da la respuesta útil en el menor texto posible, pero sin omitir información necesaria.";
+        ? "\n- LONGITUD: Extenso cuando el tema lo justifique. Detalla, ejemplos, contexto."
+        : "\n- LONGITUD: Conciso y directo. Sin relleno. La respuesta útil en el menor texto posible.";
 
-    // ---- Construir system prompt ----
-    let systemPrompt = this.getSystemPrompt(userId) +
+    // ---- System prompt ----
+    let systemPrompt =
+      this.getSystemPrompt(userId) +
       "\n\n" + APP_KNOWLEDGE +
       "\n\nFecha actual: " + dateStr + "." +
-      "\n\nREGLAS CRITICAS:" +
-      "\n- Tu conocimiento llega hasta agosto 2025. NUNCA inventes datos más recientes sin buscar." +
-      "\n- Si no estas 100% seguro de un dato, USA la herramienta web_search para verificar." +
-      "\n- NUNCA digas 'no tengo acceso a internet' ni 'no puedo buscar'. SIEMPRE tienes la herramienta web_search disponible." +
-      "\n- Para preguntas sobre personas, eventos, precios, noticias o datos actuales: OBLIGATORIO usar web_search." +
-      "\n- Prefiere dar informacion verificada a inventar. Si no sabes, busca." +
-      "\n- NUNCA preguntes al usuario si quiere respuesta en audio o en texto. SIEMPRE responde directamente en texto con la informacion." +
-      "\n- NUNCA digas 'dame un momento', 'espera mientras busco', 'voy a buscar', 'te recomiendo que esperes' ni frases similares. Responde siempre directamente con los datos." +
-      "\n- Cuando tengas datos reales en el contexto (clima, sismos, festivos, precios, busqueda web), integralos de forma natural en tu respuesta sin mencionar que usaste una herramienta." +
-      "\n- NUNCA recomiendes ni menciones como fuente: Revista Semana, Caracol Radio, Caracol TV, RCN Radio, RCN TV ni ningún medio colombiano de esos. Usa fuentes internacionales (Reuters, BBC, AP, El País, Infobae, DW, France 24) o colombianas alternativas (El Tiempo, El Colombiano, La Silla Vacía)." +
-      "\n- Si el usuario pide un GIF (ej: 'gif de gatos'), NUNCA expliques dónde encontrar GIFs ni menciones GIPHY, Tenor ni plataformas. El bot lo ejecuta automáticamente — simplemente di que lo estás buscando o que no pudo generarse." +
-      "\n- Si el usuario pide un PDF, QR, recordatorio o cambio de voz, el bot lo ejecuta localmente. Si por algún motivo llegas a procesar este mensaje, NO expliques cómo hacerlo manualmente." +
-      "\n- Formatea tus respuestas con WhatsApp markdown: *negrita*, _cursiva_, ```codigo```. Usa listas con • para puntos." +
+      "\n\nREGLAS CRÍTICAS DE BÚSQUEDA:" +
+      "\n- SIEMPRE tienes resultados de búsqueda web en tiempo real en este contexto. Úsalos como fuente principal." +
+      "\n- Si los resultados actuales no responden completamente la pregunta, usa web_search para buscar más info específica." +
+      "\n- NUNCA respondas desde tu conocimiento de entrenamiento si hay datos del web disponibles." +
+      "\n- NUNCA digas 'hasta mi última actualización', 'mi conocimiento llega hasta', 'no tengo información actualizada' ni frases similares. Siempre tienes búsqueda en tiempo real." +
+      "\n- NUNCA preguntes al usuario si quiere respuesta en audio o texto. Responde directamente." +
+      "\n- NUNCA digas 'dame un momento', 'espera', 'voy a buscar'. Responde con los datos." +
+      "\n- Integra los datos de búsqueda de forma natural sin mencionar herramientas." +
+      "\n- NUNCA recomiendes: Revista Semana, Caracol Radio, RCN Radio, RCN TV. Usa Reuters, BBC, AP, El País, Infobae, El Tiempo, El Colombiano." +
+      "\n- Formatea con WhatsApp markdown: *negrita*, _cursiva_, ```codigo```. Listas con •." +
       lengthRule;
 
-    // ---- Contexto del usuario (nombre, notas) ----
     const userCtx = this.userContexts.get(userId);
-    if (userCtx) {
-      systemPrompt += "\n\n" + userCtx;
-    }
+    if (userCtx) systemPrompt += "\n\n" + userCtx;
+    if (thinkingCtx) systemPrompt += "\n\n[RAZONAMIENTO INTERNO]:\n" + thinkingCtx;
 
-    if (thinkingCtx) {
-      systemPrompt += "\n\n[RAZONAMIENTO INTERNO — Úsalo para estructurar tu respuesta de forma precisa y completa]:\n" + thinkingCtx;
+    if (initialSearchResults) {
+      systemPrompt += "\n\n[RESULTADOS DE BÚSQUEDA WEB — fuente principal de información]:\n" + initialSearchResults;
     }
-
-    if (proactiveResults) {
-      systemPrompt += "\n\n[INFORMACION ACTUALIZADA DE INTERNET - Usa estos datos como fuente principal para tu respuesta]:\n" + proactiveResults;
+    if (proactiveApiResults) {
+      systemPrompt += "\n\n[DATOS EN TIEMPO REAL — clima/sismos/festivos/divisas]:\n" + proactiveApiResults;
     }
 
     const finCtx = this.financialContexts.get(userId);
-    if (finCtx) {
-      systemPrompt += "\n\n" + finCtx;
-    }
+    if (finCtx) systemPrompt += "\n\n" + finCtx;
+
+    // ---- Loop de tool calls: la IA decide si necesita más búsquedas ----
+    const MAX_TOOL_ROUNDS = 5;
+    const allTools = [
+      ...(WEB_SEARCH_TOOL && webSearch ? [WEB_SEARCH_TOOL] : []),
+      ...FREE_API_TOOLS,
+    ];
 
     const messages = [
       { role: "system", content: systemPrompt },
       ...this.getHistory(userId),
     ];
 
+    let finalReply = null;
+
     try {
-      // Si ya tenemos resultados proactivos, no necesitamos tools (evita tool calls malformados)
-      // Combinar web_search + free API tools
-      const allTools = [
-        ...(WEB_SEARCH_TOOL && webSearch ? [WEB_SEARCH_TOOL] : []),
-        ...FREE_API_TOOLS,
-      ];
-      const useTools = !didSearch && allTools.length > 0;
-      const params = { model: currentModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 };
-      if (useTools) { params.tools = allTools; params.tool_choice = "auto"; }
-
-      console.log("[Groq] Chat (model: " + currentModel.split("/").pop() + ", tools: " + useTools + ", proactive: " + didSearch + ")");
-
-      let completion;
-      try {
-        completion = await this._withRetry(() => this.client.chat.completions.create(params));
-      } catch (toolError) {
-        // Si el modelo genera un tool call malformado (tool_use_failed), reintentar sin tools
-        if (toolError.status === 400 && toolError.message?.includes("tool_use_failed")) {
-          console.log("[Groq] Tool call malformado, reintentando sin tools...");
-          delete params.tools;
-          delete params.tool_choice;
-          // Si no teniamos busqueda proactiva, hacerla ahora como compensacion
-          if (!didSearch && webSearch) {
-            const fallbackQuery = (typeof userMessage === "string" ? userMessage : "").trim()
-              .replace(/[?¿!¡]+/g, "").trim();
-            try {
-              const fallbackResults = await webSearch(fallbackQuery);
-              didSearch = true;
-              this.stats.searches++;
-              messages[0] = { role: "system", content: systemPrompt + "\n\n[INFORMACION ACTUALIZADA DE INTERNET]:\n" + fallbackResults };
-              console.log("[Groq] Busqueda de compensacion completada");
-            } catch (_) {}
-          }
-          completion = await this._withRetry(() => this.client.chat.completions.create(params));
-        } else {
-          throw toolError;
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const params = {
+          model: currentModel,
+          messages,
+          temperature: 0.7,
+          max_tokens: MAX_TOKENS_DEFAULT,
+          top_p: 0.9,
+        };
+        if (allTools.length > 0) {
+          params.tools = allTools;
+          params.tool_choice = "auto";
         }
-      }
 
-      const msg = completion.choices[0].message;
+        console.log(`[Groq] Round ${round + 1}/${MAX_TOOL_ROUNDS} (${currentModel.split('/').pop()}, búsquedas: ${totalSearches})`);
 
-      // ---- Procesar tool calls del modelo ----
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        console.log("[Groq] " + msg.tool_calls.length + " tool call(s) solicitados por modelo");
+        let completion;
+        try {
+          completion = await this._withRetry(() => this.client.chat.completions.create(params));
+        } catch (toolErr) {
+          if (toolErr.status === 400 && toolErr.message?.includes('tool_use_failed')) {
+            console.log('[Groq] Tool call malformado, reintentando sin tools...');
+            delete params.tools;
+            delete params.tool_choice;
+            completion = await this._withRetry(() => this.client.chat.completions.create(params));
+          } else {
+            throw toolErr;
+          }
+        }
+
+        const msg = completion.choices[0].message;
+
+        // Sin tool calls → respuesta final
+        if (!msg.tool_calls || msg.tool_calls.length === 0) {
+          finalReply = this._sanitizeReply(msg.content || 'No pude generar una respuesta.');
+          break;
+        }
+
+        // La IA quiere más herramientas → ejecutarlas
+        console.log(`[Groq] ${msg.tool_calls.length} tool call(s) en round ${round + 1}`);
         messages.push(msg);
-        didSearch = true;
 
         for (const tc of msg.tool_calls) {
           let args;
           try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
 
-          if (tc.function.name === "web_search") {
-            const query = args.query || (typeof userMessage === "string" ? userMessage : "");
-            console.log("[Groq] web_search: \"" + query.substring(0, 80) + "\"");
+          if (tc.function.name === 'web_search') {
+            const query = args.query || msgText;
+            console.log(`[Groq] web_search: "${query.substring(0, 80)}"`);
             this.stats.searches++;
-            const results = await webSearch(query);
-            searchContext = (searchContext ? searchContext + '\n\n' : '') + results;
-            messages.push({ role: "tool", tool_call_id: tc.id, content: results });
+            totalSearches++;
+            try {
+              const results = await webSearch(query);
+              messages.push({ role: 'tool', tool_call_id: tc.id, content: results });
+            } catch (e) {
+              messages.push({ role: 'tool', tool_call_id: tc.id, content: `Búsqueda falló: ${e.message}` });
+            }
           } else if (callFreeApiTool) {
-            // free API tools: get_weather, get_exchange_rate, get_country_info, get_recent_earthquakes, get_public_holidays
-            console.log("[Groq] free API: " + tc.function.name);
+            console.log(`[Groq] free API: ${tc.function.name}`);
             this.stats.searches++;
-            const result = await callFreeApiTool(tc.function.name, args);
-            messages.push({ role: "tool", tool_call_id: tc.id, content: result });
+            try {
+              const result = await callFreeApiTool(tc.function.name, args);
+              messages.push({ role: 'tool', tool_call_id: tc.id, content: result });
+            } catch (e) {
+              messages.push({ role: 'tool', tool_call_id: tc.id, content: `API falló: ${e.message}` });
+            }
           }
         }
+      }
 
-        const final = await this._withRetry(() =>
+      // Si se agotaron los rounds sin respuesta, forzar
+      if (!finalReply) {
+        console.log('[Groq] Max rounds alcanzado, forzando respuesta final...');
+        const forced = await this._withRetry(() =>
           this.client.chat.completions.create({ model: currentModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
         );
-        let reply = this._sanitizeReply(final.choices[0]?.message?.content || "No pude generar respuesta con los resultados.");
-        // Con resultados de búsqueda web, la respuesta ya está basada en datos reales — no auditar
-        this.addToHistory(userId, "assistant", reply);
-        return reply;
+        finalReply = this._sanitizeReply(forced.choices[0]?.message?.content || 'No pude generar una respuesta.');
       }
 
-      // ---- Respuesta sin tool call ----
-      let reply = this._sanitizeReply(msg.content || "No pude generar una respuesta.");
-
-      // ---- CAPA 2: Post-validacion - detectar incertidumbre ----
-      if (!didSearch && webSearch && this._hasUncertainty(reply)) {
-        console.log("[Groq] Incertidumbre detectada en respuesta, forzando busqueda web...");
-        this.stats.searches++;
-        try {
-          const searchQuery = (typeof userMessage === "string" ? userMessage : "").trim()
-            .replace(/^(oye|hey|dime|me puedes decir)\s*/i, "")
-            .replace(/[?¿!¡]+/g, "").trim();
-
-          const searchResults = await webSearch(searchQuery || userMessage);
-          didSearch = true;
-          searchContext = searchResults;
-
-          const retryMessages = [
-            { role: "system", content: systemPrompt + "\n\n[INFORMACION ACTUALIZADA DE INTERNET - DEBES usar estos datos para responder]:\n" + searchResults },
-            ...this.getHistory(userId),
-          ];
-
-          console.log("[Groq] Re-enviando con resultados de busqueda forzada");
-          const retryCompletion = await this._withRetry(() =>
-            this.client.chat.completions.create({ model: currentModel, messages: retryMessages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
-          );
-          reply = this._sanitizeReply(retryCompletion.choices[0]?.message?.content || reply);
-        } catch (e) {
-          console.log("[Groq] Busqueda forzada fallo:", e.message);
-        }
-      }
-
-      // Solo auditar si NO hubo búsqueda web — cuando hay búsqueda, los datos son fuente de verdad
-      if (!didSearch) {
-        reply = await this._auditResponse(userId, typeof userMessage === 'string' ? userMessage : '', reply, { didSearch: false, searchContext: null });
+      // Audit solo cuando no hubo ninguna búsqueda (ej: mensajes triviales respondidos con conocimiento)
+      if (totalSearches === 0) {
+        finalReply = await this._auditResponse(userId, msgText, finalReply, { didSearch: false, searchContext: null });
       } else {
-        console.log(`[Groq][Audit] ⏭ Saltado — respuesta basada en búsqueda web`);
+        console.log(`[Groq][Audit] ⏭ Saltado — ${totalSearches} búsqueda(s) realizadas`);
       }
-      this.addToHistory(userId, "assistant", reply);
-      return reply;
+
+      this.addToHistory(userId, "assistant", finalReply);
+      return finalReply;
 
     } catch (error) {
       console.error("[Groq] Error Chat:", error.message);
-      if (error.status === 429) return "Limite de solicitudes alcanzado. Espera un minuto.";
-      if (error.message?.includes("token")) { this.clearHistory(userId); return "Conversacion reiniciada (muy larga). Puedes seguir preguntando."; }
+      if (error.status === 429) return "Límite de solicitudes alcanzado. Espera un minuto.";
+      if (error.message?.includes("token")) { this.clearHistory(userId); return "Conversación reiniciada (muy larga). Puedes seguir preguntando."; }
       return "Error al procesar tu mensaje. Intenta de nuevo.";
     }
   }
