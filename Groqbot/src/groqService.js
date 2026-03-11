@@ -150,6 +150,15 @@ CAPACIDADES DEL BOT
   - Cuando pregunte por datos de un pais, usar get_country_info
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PRIVACIDAD Y DATOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  - Las conversaciones y datos personales de los usuarios son PRIVADOS.
+  - El creador (Andrew) NO tiene acceso a los mensajes ni al historial de conversaciones.
+  - Los datos se guardan en Supabase (base de datos cifrada en la nube) solo para que el bot funcione.
+  - Nadie, incluyendo Andrew, puede leer las conversaciones de los usuarios.
+  - Si alguien pregunta si el creador puede ver su informacion o mensajes, responde claramente que NO.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMANDOS — ASISTENTE IA (Groq)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   /ayuda          Ver todos los comandos
@@ -172,6 +181,9 @@ COMANDOS — ASISTENTE IA (Groq)
   /alerta         Alerta de precio: /alerta eth < 2000
   /alertas        Ver y gestionar alertas activas
   /miperfil       Ver o cambiar personalidad del usuario
+  /corto          Activar respuestas muy cortas (2-3 oraciones max)
+  /largo          Activar respuestas extensas y detalladas
+  /normal         Volver a la longitud de respuesta estandar
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMANDOS — BRIEFING Y NOTICIAS (todos los usuarios)
@@ -181,19 +193,20 @@ COMANDOS — BRIEFING Y NOTICIAS (todos los usuarios)
   /precios        TRM + criptos + divisas segun preferencias
   /prefs          Ver preferencias del briefing
   /prefs on|off   Activar/desactivar briefing automatico
-  /prefs horarios 7 13 19   Elegir horarios (solo 7, 13 o 19)
+  /prefs horarios 7 13 19   Elegir horarios (7am, 1pm, 7pm)
   /prefs monedas BTC ETH    Criptos a mostrar
   /prefs divisas EUR GBP    Divisas fiat extra
   /prefs noticias colombia tecnologia   Temas de noticias
-  /prefs cantidad 5         Numero de noticias
+  /prefs cantidad 5         Numero de noticias (1-10)
   /prefs clima on|off       Mostrar/ocultar clima
   /prefs dolar on|off       Mostrar/ocultar TRM
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMANDOS — BOT DE FINANZAS (Gastos)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Activar:  /gastos | /finanzas | /ahorros | /presupuesto | /cuentas | /dinero | /plata
-  Salir:    /salir | /stop
+  Activar:  /gastos | /gasto | /finanzas | /ahorros | /ahorro | /presupuesto
+            /cuentas | /dinero | /plata | /contador | /dineros
+  Salir:    /salir | /stop | /exit | /close | /cerrar
   Reset:    /resetgastos (reinicia onboarding desde cero)
 
   Dentro del modo gastos:
@@ -294,6 +307,10 @@ class GroqService {
     this.chatModels = new Map();
     // Map<userId, string> - contexto financiero por usuario (gastos bot)
     this.financialContexts = new Map();
+    // Map<userId, string> - info del usuario (nombre, memoria) inyectada en el sistema
+    this.userContexts = new Map();
+    // Map<userId, 'short'|'default'|'long'> - longitud de respuesta preferida
+    this.responseLengths = new Map();
     // Stats globales
     this.stats = { messages: 0, searches: 0, images: 0, audios: 0, urls: 0, documents: 0 };
 
@@ -349,6 +366,12 @@ class GroqService {
 
   setFinancialContext(userId, ctx) { this.financialContexts.set(userId, ctx); }
   clearFinancialContext(userId) { this.financialContexts.delete(userId); }
+
+  setUserContext(userId, ctx) { this.userContexts.set(userId, ctx); }
+  clearUserContext(userId) { this.userContexts.delete(userId); }
+
+  getResponseLength(userId) { return this.responseLengths.get(userId) || 'default'; }
+  setResponseLength(userId, length) { this.responseLengths.set(userId, length); }
 
   // ============================================
   // Chain of Thought - Razonamiento previo para consultas complejas
@@ -470,6 +493,17 @@ class GroqService {
       /desafortunadamente.*(no puedo|no tengo)/,
       /i (don'?t have|cannot|can'?t) (access|verify|confirm)/,
       /my (knowledge|training|data).*(cut ?off|ends|limited)/,
+      // Frases de corte de entrenamiento más comunes
+      /mi (última|ultimo).*(actualización|entrenamiento|conocimiento)/i,
+      /fecha.*de.*mi.*actualización/i,
+      /actualización.*abril.*202[0-9]/i,
+      /entrenamiento.*hasta/i,
+      /conocimiento.*hasta.*202[0-9]/i,
+      /no tengo información (sobre|acerca|de) eventos? (recientes?|actuales?|del [0-9])/i,
+      /no puedo (confirmar|verificar) eventos? (recientes?|actuales?|post)/i,
+      /para (información|datos) (más )?(recientes?|actualizados?|actuales?)/i,
+      /te sugiero (consultar|revisar|buscar) fuentes/i,
+      /según (mis datos|mi información|lo que sé) hasta/i,
     ];
 
     for (const pattern of UNCERTAINTY_PATTERNS) {
@@ -479,42 +513,56 @@ class GroqService {
   }
 
   /**
-   * Audita la respuesta de la IA contra la pregunta original del usuario.
-   * Si detecta que la respuesta no corresponde a lo pedido, genera una corrección.
-   * Usa llama-3.1-8b-instant para la auditoría (rápido y barato).
-   * Fallo silencioso: si el audit lanza error, retorna la respuesta original.
+   * Audita la relevancia de la respuesta (¿responde lo que se preguntó?).
+   * IMPORTANTE: NO verifica hechos. Si hubo búsqueda web, confía en esos datos.
+   * Solo corrige si la respuesta habla de un tema completamente diferente.
+   *
+   * @param {string} userId
+   * @param {string} userMessage
+   * @param {string} aiResponse
+   * @param {object} opts - { didSearch: boolean, searchContext: string|null }
    */
-  async _auditResponse(userId, userMessage, aiResponse) {
-    // Solo auditar mensajes de texto plano con respuesta sustancial
+  async _auditResponse(userId, userMessage, aiResponse, opts = {}) {
+    const { didSearch = false, searchContext = null } = opts;
+
     if (!aiResponse || aiResponse.length < 30) return aiResponse;
     if (!userMessage || typeof userMessage !== 'string' || userMessage.length < 6) return aiResponse;
-    // No auditar respuestas muy largas de herramientas (búsqueda web, etc.)
-    if (aiResponse.length > 3000) return aiResponse;
+    if (aiResponse.length > 3500) return aiResponse;
 
     try {
+      // Si hubo búsqueda web, el audit solo verifica que el tema sea correcto —
+      // nunca puede marcar datos del web como incorrectos (no tiene internet).
+      const auditInstructions = didSearch
+        ? 'IMPORTANTE: Esta respuesta está basada en resultados de búsqueda web en tiempo real. ' +
+          'NO tienes acceso a internet. NUNCA marques como incorrectos datos que vienen de una búsqueda web reciente. ' +
+          'TU ÚNICO criterio: ¿La respuesta habla del tema que el usuario preguntó? Si habla del tema = {"ok":true}. ' +
+          'Solo {"ok":false} si la respuesta claramente habla de un tema COMPLETAMENTE DIFERENTE al preguntado.'
+        : 'REGLAS CRÍTICAS:\n' +
+          '- NO tienes acceso a internet ni datos actualizados. NUNCA evalúes si los hechos son correctos.\n' +
+          '- SOLO verifica: ¿La respuesta intenta responder lo que el usuario preguntó?\n' +
+          '- Si intenta responder el tema correcto = {"ok":true}, aunque sea breve o incompleta.\n' +
+          '- {"ok":false} SOLO si la respuesta habla de un tema COMPLETAMENTE DIFERENTE al de la pregunta.\n' +
+          '- En cualquier duda = {"ok":true}. Sé muy conservador al marcar problemas.';
+
       const auditCompletion = await this.client.chat.completions.create({
         model: 'llama-3.1-8b-instant',
         messages: [
           {
             role: 'system',
             content:
-              'Eres un auditor de calidad de respuestas de IA para un bot de WhatsApp.\n' +
-              'Tu tarea: verificar si la RESPUESTA de la IA atiende correctamente el MENSAJE del usuario.\n\n' +
-              'Criterios:\n' +
-              '1. ¿La respuesta responde lo que el usuario pidió específicamente?\n' +
-              '2. ¿Hay información importante faltante que el usuario necesitaba?\n' +
-              '3. ¿La respuesta es coherente y no habla de otra cosa?\n\n' +
-              'Responde ÚNICAMENTE con JSON válido (sin texto antes ni después):\n' +
-              '{"ok":true} — si la respuesta es adecuada\n' +
-              '{"ok":false,"reason":"motivo breve","missing":"qué falta o qué está mal"} — si hay un problema claro',
+              'Eres un auditor de relevancia para un bot de WhatsApp.\n\n' +
+              auditInstructions +
+              '\n\nFormato de respuesta — ÚNICAMENTE JSON válido:\n' +
+              '{"ok":true}\n' +
+              '{"ok":false,"reason":"la respuesta habla de X pero el usuario preguntó sobre Y"}',
           },
           {
             role: 'user',
-            content: `MENSAJE DEL USUARIO:\n${userMessage.substring(0, 500)}\n\nRESPUESTA DE LA IA:\n${aiResponse.substring(0, 800)}`,
+            content: `PREGUNTA:\n${userMessage.substring(0, 400)}\n\nRESPUESTA:\n${aiResponse.substring(0, 700)}`,
           },
         ],
         temperature: 0.1,
-        max_tokens: 120,
+        max_tokens: 80,
       });
 
       const auditText = (auditCompletion.choices[0]?.message?.content || '').trim();
@@ -526,25 +574,23 @@ class GroqService {
         return aiResponse;
       }
 
-      if (auditResult.ok === false && auditResult.missing) {
-        console.log(`[Groq][Audit] ❌ Fallo — Motivo: "${auditResult.reason}" | Falta: "${auditResult.missing}"`);
+      if (auditResult.ok === false && auditResult.reason) {
+        console.log(`[Groq][Audit] ❌ Off-topic — "${auditResult.reason}"`);
+        console.log(`[Groq][Audit] Original (${aiResponse.length} chars): "${aiResponse.substring(0, 150).replace(/\n/g, ' ')}..."`);
 
         const currentModel = this.getModel(userId);
+        // La corrección incluye el contexto de búsqueda si estaba disponible
+        const correctionSystem =
+          'Eres Cortana, asistente de WhatsApp. El auditor detectó que tu respuesta anterior no correspondía a la pregunta del usuario.\n' +
+          `Problema: ${auditResult.reason}\n\n` +
+          (searchContext ? `[DATOS DE BÚSQUEDA WEB — úsalos para responder]:\n${searchContext.substring(0, 2000)}\n\n` : '') +
+          'Genera una respuesta NUEVA que responda directamente lo que se preguntó. No menciones al auditor.';
+
         const correctionCompletion = await this.client.chat.completions.create({
           model: currentModel,
           messages: [
-            {
-              role: 'system',
-              content:
-                'Eres Cortana, un asistente de WhatsApp. El auditor de calidad detectó que tu respuesta anterior no atendió correctamente al usuario.\n' +
-                `Problema: ${auditResult.reason || 'Respuesta incompleta o incorrecta'}\n` +
-                `Qué falta: ${auditResult.missing}\n\n` +
-                'Genera una respuesta NUEVA, completa y correcta. No menciones el proceso de corrección ni al auditor.',
-            },
-            {
-              role: 'user',
-              content: userMessage,
-            },
+            { role: 'system', content: correctionSystem },
+            { role: 'user', content: userMessage },
           ],
           temperature: 0.7,
           max_tokens: 800,
@@ -552,16 +598,16 @@ class GroqService {
 
         const corrected = this._sanitizeReply(correctionCompletion.choices[0]?.message?.content || '');
         if (corrected && corrected.length > 20) {
-          console.log('[Groq][Audit] ✅ Respuesta corregida y enviada.');
+          console.log(`[Groq][Audit] ✅ Corregida (${corrected.length} chars): "${corrected.substring(0, 150).replace(/\n/g, ' ')}..."`);
           return corrected;
         }
       } else {
-        console.log('[Groq][Audit] ✅ Respuesta aprobada.');
+        console.log(`[Groq][Audit] ✅ OK${didSearch ? ' (web-backed)' : ''} — "${aiResponse.substring(0, 80).replace(/\n/g, ' ')}..."`);
       }
 
       return aiResponse;
     } catch (e) {
-      console.log('[Groq][Audit] Falló silenciosamente:', e.message?.substring(0, 60));
+      console.log('[Groq][Audit] Error silencioso:', e.message?.substring(0, 60));
       return aiResponse;
     }
   }
@@ -615,6 +661,7 @@ class GroqService {
     const currentModel = this.getModel(userId);
     const dateStr = new Date().toLocaleDateString("es-CO", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: process.env.TIMEZONE || 'America/Bogota' });
     let didSearch = false;
+    let searchContext = null; // guardamos los resultados de búsqueda para pasarlos al audit
 
     // ---- CAPA 1A: APIs gratuitas proactivas (clima, sismos, festivos) ----
     let proactiveResults = null;
@@ -626,6 +673,7 @@ class GroqService {
         try {
           proactiveResults = await callFreeApiTool(proactiveApi.tool, proactiveApi.args);
           didSearch = true;
+          searchContext = proactiveResults;
           console.log("[Groq] Datos obtenidos de " + proactiveApi.tool);
         } catch (e) {
           console.log("[Groq] API proactiva fallo (" + proactiveApi.tool + "):", e.message);
@@ -642,6 +690,7 @@ class GroqService {
         try {
           proactiveResults = await webSearch(query);
           didSearch = true;
+          searchContext = proactiveResults;
           console.log("[Groq] Resultados proactivos obtenidos");
         } catch (e) {
           console.log("[Groq] Busqueda proactiva fallo:", e.message);
@@ -655,6 +704,15 @@ class GroqService {
       thinkingCtx = await this._generateThinkingContext(userMessage);
       if (thinkingCtx) console.log('[Groq] Chain-of-thought generado para respuesta estructurada');
     }
+
+    // ---- Longitud de respuesta preferida ----
+    const respLen = this.getResponseLength(userId);
+    const lengthRule =
+      respLen === 'short'
+        ? "\n- LONGITUD: Respuestas MUY CORTAS. Máximo 2-3 oraciones o una lista breve. Solo lo esencial, sin contexto extra ni explicaciones adicionales."
+        : respLen === 'long'
+        ? "\n- LONGITUD: Puedes ser extenso/a cuando el tema lo justifique. Desarrolla con detalle, ejemplos y contexto si aporta valor."
+        : "\n- LONGITUD: Respuestas concisas y directas. Sin introducciones genéricas, sin relleno. Da la respuesta útil en el menor texto posible, pero sin omitir información necesaria.";
 
     // ---- Construir system prompt ----
     let systemPrompt = this.getSystemPrompt(userId) +
@@ -672,7 +730,14 @@ class GroqService {
       "\n- NUNCA recomiendes ni menciones como fuente: Revista Semana, Caracol Radio, Caracol TV, RCN Radio, RCN TV ni ningún medio colombiano de esos. Usa fuentes internacionales (Reuters, BBC, AP, El País, Infobae, DW, France 24) o colombianas alternativas (El Tiempo, El Colombiano, La Silla Vacía)." +
       "\n- Si el usuario pide un GIF (ej: 'gif de gatos'), NUNCA expliques dónde encontrar GIFs ni menciones GIPHY, Tenor ni plataformas. El bot lo ejecuta automáticamente — simplemente di que lo estás buscando o que no pudo generarse." +
       "\n- Si el usuario pide un PDF, QR, recordatorio o cambio de voz, el bot lo ejecuta localmente. Si por algún motivo llegas a procesar este mensaje, NO expliques cómo hacerlo manualmente." +
-      "\n- Formatea tus respuestas con WhatsApp markdown: *negrita*, _cursiva_, ```codigo```. Usa listas con • para puntos.";
+      "\n- Formatea tus respuestas con WhatsApp markdown: *negrita*, _cursiva_, ```codigo```. Usa listas con • para puntos." +
+      lengthRule;
+
+    // ---- Contexto del usuario (nombre, notas) ----
+    const userCtx = this.userContexts.get(userId);
+    if (userCtx) {
+      systemPrompt += "\n\n" + userCtx;
+    }
 
     if (thinkingCtx) {
       systemPrompt += "\n\n[RAZONAMIENTO INTERNO — Úsalo para estructurar tu respuesta de forma precisa y completa]:\n" + thinkingCtx;
@@ -749,6 +814,7 @@ class GroqService {
             console.log("[Groq] web_search: \"" + query.substring(0, 80) + "\"");
             this.stats.searches++;
             const results = await webSearch(query);
+            searchContext = (searchContext ? searchContext + '\n\n' : '') + results;
             messages.push({ role: "tool", tool_call_id: tc.id, content: results });
           } else if (callFreeApiTool) {
             // free API tools: get_weather, get_exchange_rate, get_country_info, get_recent_earthquakes, get_public_holidays
@@ -763,7 +829,7 @@ class GroqService {
           this.client.chat.completions.create({ model: currentModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
         );
         let reply = this._sanitizeReply(final.choices[0]?.message?.content || "No pude generar respuesta con los resultados.");
-        reply = await this._auditResponse(userId, typeof userMessage === 'string' ? userMessage : '', reply);
+        reply = await this._auditResponse(userId, typeof userMessage === 'string' ? userMessage : '', reply, { didSearch: true, searchContext });
         this.addToHistory(userId, "assistant", reply);
         return reply;
       }
@@ -782,6 +848,7 @@ class GroqService {
 
           const searchResults = await webSearch(searchQuery || userMessage);
           didSearch = true;
+          searchContext = searchResults;
 
           const retryMessages = [
             { role: "system", content: systemPrompt + "\n\n[INFORMACION ACTUALIZADA DE INTERNET - DEBES usar estos datos para responder]:\n" + searchResults },
@@ -798,7 +865,7 @@ class GroqService {
         }
       }
 
-      reply = await this._auditResponse(userId, typeof userMessage === 'string' ? userMessage : '', reply);
+      reply = await this._auditResponse(userId, typeof userMessage === 'string' ? userMessage : '', reply, { didSearch, searchContext });
       this.addToHistory(userId, "assistant", reply);
       return reply;
 

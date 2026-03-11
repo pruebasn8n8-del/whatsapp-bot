@@ -756,6 +756,23 @@ function setupRouter(sock, groqService) {
           // Si el handler no reconoció el mensaje → cae a Groq IA normalmente
         }
 
+        // /corto, /largo, /normal — ajustar longitud de respuestas
+        if (textLower === '/corto' || textLower === '/short') {
+          groqService.setResponseLength(jid, 'short');
+          await sock.sendMessage(jid, { text: PREFIX + '✅ Respuestas cortas activadas. Escribe */normal* para volver al modo estándar.' });
+          continue;
+        }
+        if (textLower === '/largo' || textLower === '/long' || textLower === '/detalle') {
+          groqService.setResponseLength(jid, 'long');
+          await sock.sendMessage(jid, { text: PREFIX + '✅ Respuestas extensas activadas. Escribe */normal* para volver al modo estándar.' });
+          continue;
+        }
+        if (textLower === '/normal') {
+          groqService.setResponseLength(jid, 'default');
+          await sock.sendMessage(jid, { text: PREFIX + '✅ Longitud de respuesta restablecida al modo estándar.' });
+          continue;
+        }
+
         // Groq IA — responde todo lo que gastos no procesó
         await loadPersonalityIfNeeded(jid, groqService);
 

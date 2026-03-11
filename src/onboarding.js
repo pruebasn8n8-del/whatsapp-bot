@@ -175,13 +175,20 @@ async function handleOnboardingStep(sock, jid, userText, groqService) {
 }
 
 /**
- * Carga la personalidad desde Supabase a groqService si no está en memoria.
+ * Carga la personalidad y contexto del usuario desde Supabase a groqService si no están en memoria.
  */
 async function loadPersonalityIfNeeded(jid, groqService) {
-  if (groqService.customPrompts.has(jid)) return;
+  const needsPersonality = !groqService.customPrompts.has(jid);
+  const needsUserCtx = !groqService.userContexts.has(jid);
+  if (!needsPersonality && !needsUserCtx) return;
+
   const contact = await getContact(jid);
-  if (contact?.personality) {
+  if (needsPersonality && contact?.personality) {
     groqService.setCustomPrompt(jid, contact.personality);
+  }
+  if (needsUserCtx && contact?.name) {
+    // Inyectar nombre explícito para que la IA lo conozca con certeza
+    groqService.setUserContext(jid, `[DATOS DEL USUARIO]\nNombre: ${contact.name}`);
   }
 }
 
