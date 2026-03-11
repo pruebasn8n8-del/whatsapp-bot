@@ -294,7 +294,7 @@ class GroqService {
     this.client = new Groq({ apiKey: process.env.GROQ_API_KEY });
     this.model = process.env.GROQ_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct";
     this.defaultSystemPrompt = process.env.BOT_PERSONALITY || "Eres un asistente util.";
-    this.maxHistory = parseInt(process.env.MAX_HISTORY) || 20;
+    this.maxHistory = parseInt(process.env.MAX_HISTORY) || 100;
     this.ttsVoice = process.env.TTS_VOICE || "leda";
     this.ttsModel = "canopylabs/orpheus-v1-english";
     this.sttModel = "whisper-large-v3-turbo";
@@ -686,15 +686,35 @@ class GroqService {
     const isTrivial = this._isTrivialMessage(msgText);
     let totalSearches = 0;
 
+    // ---- Construir query enriquecida con contexto del historial ----
+    // Si el mensaje es corto (< 80 chars), siempre añade contexto de los últimos
+    // intercambios para que la búsqueda sepa de qué se está hablando.
+    const buildSearchQuery = () => {
+      let base = msgText
+        .replace(/^(oye|hey|dime|cuéntame|explícame|sabes|sabes algo sobre)\s*/i, '')
+        .replace(/[?¿!¡]+/g, '')
+        .trim();
+
+      if (base.length < 80) {
+        // Tomar los últimos 4 mensajes del historial (2 pares user/assistant)
+        // excluyendo el mensaje actual que ya se agregó al historial
+        const history = this.getHistory(userId);
+        const recent = history.slice(-5, -1);
+        const ctx = recent
+          .map(m => m.content?.substring(0, 120).replace(/\n/g, ' '))
+          .filter(Boolean)
+          .join(' → ');
+        if (ctx) base = ctx + ' | ' + base;
+      }
+
+      return base.substring(0, 400);
+    };
+
     // ---- Búsqueda inicial siempre que el mensaje no sea trivial ----
     let initialSearchResults = null;
     if (!isTrivial && webSearch) {
-      const query = msgText
-        .replace(/^(oye|hey|dime|cuéntame|explícame|sabes|sabes algo sobre)\s*/i, '')
-        .replace(/[?¿!¡]+/g, '')
-        .trim()
-        .substring(0, 200);
-      console.log(`[Groq] Búsqueda inicial: "${query.substring(0, 80)}"`);
+      const query = buildSearchQuery();
+      console.log(`[Groq] Búsqueda inicial: "${query.substring(0, 120)}"`);
       this.stats.searches++;
       totalSearches++;
       try {
