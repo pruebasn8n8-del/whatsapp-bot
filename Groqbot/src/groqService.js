@@ -479,6 +479,94 @@ class GroqService {
   }
 
   /**
+   * Audita la respuesta de la IA contra la pregunta original del usuario.
+   * Si detecta que la respuesta no corresponde a lo pedido, genera una corrección.
+   * Usa llama-3.1-8b-instant para la auditoría (rápido y barato).
+   * Fallo silencioso: si el audit lanza error, retorna la respuesta original.
+   */
+  async _auditResponse(userId, userMessage, aiResponse) {
+    // Solo auditar mensajes de texto plano con respuesta sustancial
+    if (!aiResponse || aiResponse.length < 30) return aiResponse;
+    if (!userMessage || typeof userMessage !== 'string' || userMessage.length < 6) return aiResponse;
+    // No auditar respuestas muy largas de herramientas (búsqueda web, etc.)
+    if (aiResponse.length > 3000) return aiResponse;
+
+    try {
+      const auditCompletion = await this.client.chat.completions.create({
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Eres un auditor de calidad de respuestas de IA para un bot de WhatsApp.\n' +
+              'Tu tarea: verificar si la RESPUESTA de la IA atiende correctamente el MENSAJE del usuario.\n\n' +
+              'Criterios:\n' +
+              '1. ¿La respuesta responde lo que el usuario pidió específicamente?\n' +
+              '2. ¿Hay información importante faltante que el usuario necesitaba?\n' +
+              '3. ¿La respuesta es coherente y no habla de otra cosa?\n\n' +
+              'Responde ÚNICAMENTE con JSON válido (sin texto antes ni después):\n' +
+              '{"ok":true} — si la respuesta es adecuada\n' +
+              '{"ok":false,"reason":"motivo breve","missing":"qué falta o qué está mal"} — si hay un problema claro',
+          },
+          {
+            role: 'user',
+            content: `MENSAJE DEL USUARIO:\n${userMessage.substring(0, 500)}\n\nRESPUESTA DE LA IA:\n${aiResponse.substring(0, 800)}`,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 120,
+      });
+
+      const auditText = (auditCompletion.choices[0]?.message?.content || '').trim();
+      let auditResult;
+      try {
+        const jsonMatch = auditText.match(/\{[\s\S]*\}/);
+        auditResult = jsonMatch ? JSON.parse(jsonMatch[0]) : { ok: true };
+      } catch {
+        return aiResponse;
+      }
+
+      if (auditResult.ok === false && auditResult.missing) {
+        console.log(`[Groq][Audit] ❌ Fallo — Motivo: "${auditResult.reason}" | Falta: "${auditResult.missing}"`);
+
+        const currentModel = this.getModel(userId);
+        const correctionCompletion = await this.client.chat.completions.create({
+          model: currentModel,
+          messages: [
+            {
+              role: 'system',
+              content:
+                'Eres Cortana, un asistente de WhatsApp. El auditor de calidad detectó que tu respuesta anterior no atendió correctamente al usuario.\n' +
+                `Problema: ${auditResult.reason || 'Respuesta incompleta o incorrecta'}\n` +
+                `Qué falta: ${auditResult.missing}\n\n` +
+                'Genera una respuesta NUEVA, completa y correcta. No menciones el proceso de corrección ni al auditor.',
+            },
+            {
+              role: 'user',
+              content: userMessage,
+            },
+          ],
+          temperature: 0.7,
+          max_tokens: 800,
+        });
+
+        const corrected = this._sanitizeReply(correctionCompletion.choices[0]?.message?.content || '');
+        if (corrected && corrected.length > 20) {
+          console.log('[Groq][Audit] ✅ Respuesta corregida y enviada.');
+          return corrected;
+        }
+      } else {
+        console.log('[Groq][Audit] ✅ Respuesta aprobada.');
+      }
+
+      return aiResponse;
+    } catch (e) {
+      console.log('[Groq][Audit] Falló silenciosamente:', e.message?.substring(0, 60));
+      return aiResponse;
+    }
+  }
+
+  /**
    * Limpia tokens especiales de Llama que a veces se filtran en la respuesta.
    */
   _sanitizeReply(text) {
@@ -674,7 +762,8 @@ class GroqService {
         const final = await this._withRetry(() =>
           this.client.chat.completions.create({ model: currentModel, messages, temperature: 0.7, max_tokens: MAX_TOKENS_DEFAULT, top_p: 0.9 })
         );
-        const reply = this._sanitizeReply(final.choices[0]?.message?.content || "No pude generar respuesta con los resultados.");
+        let reply = this._sanitizeReply(final.choices[0]?.message?.content || "No pude generar respuesta con los resultados.");
+        reply = await this._auditResponse(userId, typeof userMessage === 'string' ? userMessage : '', reply);
         this.addToHistory(userId, "assistant", reply);
         return reply;
       }
@@ -709,6 +798,7 @@ class GroqService {
         }
       }
 
+      reply = await this._auditResponse(userId, typeof userMessage === 'string' ? userMessage : '', reply);
       this.addToHistory(userId, "assistant", reply);
       return reply;
 

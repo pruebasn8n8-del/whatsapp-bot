@@ -24,8 +24,13 @@ const { startGastosOnboarding, handleGastosOnboardingStep, resendCurrentStep } =
 const { setCurrentSpreadsheetId } = require('../Gastos/src/sheets/sheetsClient');
 const { getFinancialSummary } = require('../Gastos/src/sheets/financialSummary');
 
-// Palabras clave opcionales que inician el onboarding de gastos o muestran estado
-const GASTOS_TRIGGERS = ['/gastos', '/ahorros', '/finanzas', '/presupuesto', '/cuentas', '/dinero', '/plata'];
+// Comandos que activan el modo finanzas (requiere escribirlos explícitamente)
+const GASTOS_TRIGGERS = ['/gastos', '/ahorros', '/finanzas', '/presupuesto', '/cuentas', '/dinero', '/plata', '/gasto', '/contador', '/ahorro', '/dineros'];
+// Comandos para salir del modo finanzas
+const GASTOS_EXIT_CMDS = ['/salir', '/stop', '/exit', '/close', '/cerrar', '/salir'];
+
+// Map<jid, boolean> — usuarios con modo finanzas activo (en memoria, se limpia si el server reinicia)
+const gastosActiveUsers = new Map();
 
 /**
  * Construye el contexto financiero del usuario a partir de gastosData.config (Supabase).
@@ -162,6 +167,7 @@ function setupRouter(sock, groqService) {
         // /resetgastos - cualquier usuario puede reiniciar su propio perfil de gastos
         if (textLower === '/resetgastos') {
           await resetGastosData(jid);
+          gastosActiveUsers.set(jid, false);
           await sock.sendMessage(jid, {
             text: PREFIX + '✅ Tu perfil de gastos fue reiniciado.\nEscribe /gastos para configurarlo de nuevo.',
           });
@@ -679,32 +685,41 @@ function setupRouter(sock, groqService) {
           continue;
         }
 
-        // /salir y /stop — ya no hay modo que desactivar, el bot es unificado
-        if (textLower === '/salir' || textLower === '/stop') {
-          await sock.sendMessage(jid, { text: PREFIX + '¿En qué puedo ayudarte? Escríbeme lo que necesites.' });
+        // /salir, /exit, /close — desactivan el modo finanzas si estaba activo
+        if (GASTOS_EXIT_CMDS.includes(textLower)) {
+          const wasActive = gastosActiveUsers.get(jid);
+          gastosActiveUsers.set(jid, false);
+          if (wasActive) {
+            await sock.sendMessage(jid, { text: PREFIX + '✅ *Modo Finanzas desactivado.*\nVuelves al chat normal. ¿En qué más te ayudo?' });
+          } else {
+            await sock.sendMessage(jid, { text: PREFIX + '¿En qué puedo ayudarte? Escríbeme lo que necesites.' });
+          }
           continue;
         }
 
-        // Trigger words de gastos — opcionales, inician onboarding o muestran estado
+        // Comandos de activación de modo finanzas — REQUIERE escribir el comando explícitamente
         if (GASTOS_TRIGGERS.includes(textLower)) {
           const gd = await getGastosData(jid);
           if (gd.onboarding_step === 'complete' && gd.sheet_id) {
+            // Activar modo finanzas para este usuario
+            gastosActiveUsers.set(jid, true);
             const divider = '─'.repeat(25);
             await sock.sendMessage(jid, {
               text: PREFIX + [
-                '💰 *Tu tracker de gastos está listo*',
+                '💰 *Modo Finanzas activado*',
                 divider,
                 '',
-                'Escríbeme directamente (sin comandos):',
+                'Registra gastos o consulta tu información:',
                 '  • _"Almuerzo 25k"_ — registrar gasto',
-                '  • _"ver mis gastos"_ — últimos gastos del mes',
+                '  • _"ver gastos"_ — últimos gastos del mes',
                 '  • _"resumen"_ — análisis financiero completo',
                 '  • _"cuánto tengo"_ — estado de cuentas',
-                '  • _"ver config"_ — configuración actual',
+                '  • _"config"_ — configuración actual',
+                '  • _"/ayuda"_ — todos los comandos disponibles',
                 '',
                 `📊 ${gd.sheet_url || 'Hoja de cálculo configurada'}`,
                 divider,
-                '_Escribe /resetgastos para reconfigurar desde cero._',
+                '_/salir · /exit · /close para volver al chat normal._',
               ].join('\n'),
             });
           } else if (gd.onboarding_step && gd.onboarding_step !== 'complete') {
@@ -716,20 +731,19 @@ function setupRouter(sock, groqService) {
         }
 
         // ============================================
-        // RUTEO UNIFICADO — Gastos → Groq
-        // Si gastos está configurado, intenta procesarlo primero.
-        // Si el mensaje no es gasto ni consulta financiera, cae a Groq IA.
+        // MODO FINANZAS — Solo activo si el usuario lo activó con un comando trigger.
+        // No se activa automáticamente por lenguaje natural.
         // ============================================
         const gastosData = await getGastosData(jid);
 
-        // Onboarding de gastos en progreso → continuar setup
+        // Onboarding de gastos en progreso → continuar setup (siempre, sin importar el modo)
         if (gastosData.onboarding_step && gastosData.onboarding_step !== 'complete') {
           await handleGastosOnboardingStep(sock, jid, text, groqService);
           continue;
         }
 
-        // Gastos configurado → intentar procesar primero
-        if (gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
+        // Modo finanzas activo Y gastos configurado → enrutar al handler de gastos
+        if (gastosActiveUsers.get(jid) && gastosData.onboarding_step === 'complete' && gastosData.sheet_id) {
           setCurrentSpreadsheetId(gastosData.sheet_id);
           let handled;
           try {
@@ -739,7 +753,7 @@ function setupRouter(sock, groqService) {
             handled = false;
           }
           if (handled !== false) continue;
-          // Si no manejó → cae a Groq IA
+          // Si el handler no reconoció el mensaje → cae a Groq IA normalmente
         }
 
         // Groq IA — responde todo lo que gastos no procesó
