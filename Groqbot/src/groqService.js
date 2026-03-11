@@ -696,15 +696,14 @@ class GroqService {
         .trim();
 
       if (base.length < 80) {
-        // Tomar los últimos 4 mensajes del historial (2 pares user/assistant)
-        // excluyendo el mensaje actual que ya se agregó al historial
+        // Usar la última respuesta del asistente como contexto para la búsqueda.
+        // Ej: "Lo mataron?" + ctx "Nicolás Maduro capturado 2026" → query relevante.
         const history = this.getHistory(userId);
-        const recent = history.slice(-5, -1);
-        const ctx = recent
-          .map(m => m.content?.substring(0, 120).replace(/\n/g, ' '))
-          .filter(Boolean)
-          .join(' → ');
-        if (ctx) base = ctx + ' | ' + base;
+        const lastAsst = [...history].reverse().find(m => m.role === 'assistant' && typeof m.content === 'string');
+        if (lastAsst) {
+          const ctx = lastAsst.content.substring(0, 150).replace(/\n/g, ' ').trim();
+          if (ctx) base = ctx + ' | ' + base;
+        }
       }
 
       return base.substring(0, 400);
