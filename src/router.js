@@ -23,6 +23,7 @@ const { getTRM, getCryptoPrice, getFxRates, formatCOP: _formatCOP, formatUSD: _f
 const { CRYPTO_EMOJI, FX_EMOJI, FX_NAME } = require('../DailyBriefing/src/briefingService');
 const { getGastosData, setGastosData, resetAllGastosData, resetGastosData } = require('./gastosDb');
 const { startGastosOnboarding, handleGastosOnboardingStep, resendCurrentStep } = require('../Gastos/src/gastosOnboarding');
+const { generatePDF, generatePPTX, detectDocumentRequest } = require('./docGenerator');
 const { setCurrentSpreadsheetId } = require('../Gastos/src/sheets/sheetsClient');
 const { getFinancialSummary } = require('../Gastos/src/sheets/financialSummary');
 
@@ -778,6 +779,57 @@ function setupRouter(sock, groqService) {
         if (textLower === '/normal') {
           groqService.setResponseLength(jid, 'default');
           await sock.sendMessage(jid, { text: PREFIX + '✅ Longitud de respuesta restablecida al modo estándar.' });
+          continue;
+        }
+
+        // ── Generación de documentos (PDF / PPTX) ──────────────────────
+        const docType = detectDocumentRequest(text);
+        if (docType) {
+          await loadPersonalityIfNeeded(jid, groqService);
+          await sock.sendPresenceUpdate('composing', jid);
+          try {
+            // Pedir estructura JSON a Groq
+            const structurePrompt = docType === 'pptx'
+              ? `El usuario pidió: "${text}"\n\nGenera una presentación PowerPoint. Responde SOLO con JSON válido, sin markdown, sin explicación:\n{"title":"...","slides":[{"title":"...","points":["...","...","..."]}]}`
+              : `El usuario pidió: "${text}"\n\nGenera un documento PDF. Responde SOLO con JSON válido, sin markdown, sin explicación:\n{"title":"...","sections":[{"heading":"...","content":"..."},{"heading":"...","content":"..."}]}`;
+
+            const structRes = await groqService.client.chat.completions.create({
+              model: 'llama-3.3-70b-versatile',
+              messages: [
+                { role: 'system', content: 'Eres un asistente que genera estructuras JSON para documentos. Responde SOLO con el JSON, sin texto adicional, sin bloques de código.' },
+                { role: 'user', content: structurePrompt },
+              ],
+              max_tokens: 3000,
+              temperature: 0.6,
+            });
+
+            let raw = (structRes.choices[0]?.message?.content || '').trim();
+            // Limpiar posibles bloques de código
+            raw = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+
+            const structure = JSON.parse(raw);
+            let fileBuffer, fileName, mimeType;
+
+            if (docType === 'pptx') {
+              fileBuffer = await generatePPTX(structure.title, structure.slides || []);
+              fileName   = `${(structure.title || 'presentacion').substring(0, 40).replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s]/g, '').trim()}.pptx`;
+              mimeType   = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+            } else {
+              fileBuffer = await generatePDF(structure.title, structure.sections || []);
+              fileName   = `${(structure.title || 'documento').substring(0, 40).replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s]/g, '').trim()}.pdf`;
+              mimeType   = 'application/pdf';
+            }
+
+            await sock.sendMessage(jid, {
+              document: fileBuffer,
+              mimetype: mimeType,
+              fileName,
+              caption: `📄 *${structure.title}*`,
+            });
+          } catch (docErr) {
+            console.error('[Router] Error generando documento:', docErr.message);
+            await sock.sendMessage(jid, { text: PREFIX + 'No pude generar el documento. Intenta de nuevo con más detalles.' });
+          }
           continue;
         }
 
