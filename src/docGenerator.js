@@ -50,11 +50,22 @@ async function _downloadImage(url) {
   return buf.length > 8192 ? buf : null;
 }
 
-// Dominios bloqueados: streams, redes sociales, propaganda
+// Dominios bloqueados: streams, redes sociales, noticias, academia, propaganda
 const BLOCKED_DOMAINS = [
+  // Streams y redes sociales
   'twitch.tv','twitter.com','x.com','instagram.com','tiktok.com',
   'youtube.com','youtu.be','reddit.com','facebook.com','pinterest.com',
-  'tumblr.com','discord.com','patreon.com','streamable.com','clips.twitch.tv',
+  'tumblr.com','discord.com','patreon.com','streamable.com',
+  // Canales deportivos / propaganda
+  'clarosports.com','espn.com','espndeportes.com','fox.com','foxsports.com',
+  'nbcsports.com','goal.com','marca.com','sport.es','as.com',
+  'mundodeportivo.com','tycsports.com','directv.com','canalrcn.com',
+  // Noticias (thumbnails irrelevantes)
+  'cnn.com','bbc.com','reuters.com','apnews.com','nytimes.com',
+  'theguardian.com','elmundo.es','elpais.com','infobae.com','eltiempo.com',
+  // Academicos / documentos (capturas de tesis, papers, Word)
+  'academia.edu','researchgate.net','scribd.com','slideshare.net',
+  'issuu.com','docplayer.net','docsity.com','studocu.com',
 ];
 function _isBlockedUrl(url) {
   if (!url) return false;
@@ -62,6 +73,12 @@ function _isBlockedUrl(url) {
     const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
     return BLOCKED_DOMAINS.some(d => host === d || host.endsWith('.' + d));
   } catch { return false; }
+}
+
+// Patrones en la URL/título que indican captura de documento o propaganda
+function _looksLikeDocument(candidate) {
+  const text = ((candidate.image || '') + ' ' + (candidate.title || '')).toLowerCase();
+  return /\.(pdf|docx?|pptx?|xlsx?)|scribd|slideshare|word\s?doc|thesis|dissertation|tesis|trabajo\s?de\s?grado|academia\.edu/i.test(text);
 }
 
 /**
@@ -90,7 +107,7 @@ async function _getDDGCandidates(keyword, count, offset = 0) {
   if (!vqd) return [];
 
   const apiUrl = 'https://duckduckgo.com/i.js?' + new URLSearchParams({
-    q, o: 'json', p: '1', s: String(offset), u: 'bing', f: ',,,', l: 'en-us', vqd,
+    q, o: 'json', p: '1', s: String(offset), u: 'bing', f: ',,,type:photo', l: 'en-us', vqd,
   });
   const apiRes = await fetch(apiUrl, {
     headers: { 'User-Agent': UA, 'Referer': 'https://duckduckgo.com/', 'Accept': 'application/json' },
@@ -102,7 +119,8 @@ async function _getDDGCandidates(keyword, count, offset = 0) {
       r.image?.startsWith('https') &&
       (r.width || 0) >= 600 &&
       !_isBlockedUrl(r.image) &&
-      !_isBlockedUrl(r.url)
+      !_isBlockedUrl(r.url) &&
+      !_looksLikeDocument(r)
     )
     .slice(0, count);
 }
@@ -180,6 +198,7 @@ async function fetchDocImages(coverKeyword, sectionKeywords) {
     const candidates = candidateLists[ki]?.status === 'fulfilled' ? (candidateLists[ki].value || []) : [];
 
     const scored = candidates
+      .filter(c => !_looksLikeDocument(c))
       .map(c => ({ ...c, score: _scoreCandidate(c, keyword) }))
       .sort((a, b) => b.score - a.score);
 
@@ -191,6 +210,7 @@ async function fetchDocImages(coverKeyword, sectionKeywords) {
     try {
       const more = await _getDDGCandidates(keyword, 18, 20);
       const morePick = more
+        .filter(c => !_looksLikeDocument(c))
         .map(c => ({ ...c, score: _scoreCandidate(c, keyword) }))
         .sort((a, b) => b.score - a.score)
         .find(c => !usedUrls.has(c.image));
