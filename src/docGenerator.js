@@ -341,17 +341,21 @@ function _renderInlineLine(doc, rawText, x, y, w, baseFontSize, baseColor, opts 
     if (!seg.text) return;
     const isLast = i === segs.length - 1;
     const isFirst = i === 0;
+    // width y align SOLO en el primer segmento — establecen el bloque de texto.
+    // Segmentos continued heredan esas propiedades; re-pasarlas causa que PDFKit
+    // calcule el ancho desde la x actual del cursor, generando overflow.
+    const blockOpts = isFirst
+      ? { width: w, align: opts.align || 'left', lineGap: opts.lineGap ?? 3 }
+      : { lineGap: opts.lineGap ?? 3 };
     if (seg.code) {
       doc.fillColor('#1E293B').fillOpacity(1).font('Courier').fontSize(baseFontSize - 1.5)
-         .text(seg.text, isFirst ? x : undefined, isFirst ? y : undefined, {
-           continued: !isLast, ...(isFirst && { width: w }), lineGap: opts.lineGap ?? 3,
-         });
+         .text(seg.text, isFirst ? x : undefined, isFirst ? y : undefined,
+               { continued: !isLast, ...blockOpts });
     } else {
       doc.fillColor(seg.bold ? '#1F2937' : baseColor).fillOpacity(1)
          .font(seg.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(baseFontSize)
-         .text(seg.text, isFirst ? x : undefined, isFirst ? y : undefined, {
-           continued: !isLast, ...(isFirst && { width: w }), lineGap: opts.lineGap ?? 3, align: opts.align || 'left',
-         });
+         .text(seg.text, isFirst ? x : undefined, isFirst ? y : undefined,
+               { continued: !isLast, ...blockOpts });
     }
   });
 }
