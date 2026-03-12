@@ -37,29 +37,78 @@ function getTheme(title) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fetch de imagen de portada desde Unsplash Source
+// Fetch de imagen por keyword — DuckDuckGo scraping + Unsplash API opcional
 // ─────────────────────────────────────────────────────────────────────────────
+const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
+async function _downloadImage(url) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': UA },
+    signal: AbortSignal.timeout(10000),
+    redirect: 'follow',
+  });
+  if (!res.ok) return null;
+  const buf = Buffer.from(await res.arrayBuffer());
+  return buf.length > 8192 ? buf : null;
+}
+
+async function _getDDGImageUrl(keyword) {
+  const q = `${keyword} minimal photography landscape`;
+  // 1. Obtener token vqd
+  const pageRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(q)}&ia=images`, {
+    headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
+    signal: AbortSignal.timeout(8000),
+  });
+  const html = await pageRes.text();
+  const vqd  = (html.match(/vqd=['"]([^'"]+)['"]/) || [])[1];
+  if (!vqd) return null;
+
+  // 2. Buscar imágenes
+  const apiUrl = `https://duckduckgo.com/i.js?` + new URLSearchParams({
+    q, o: 'json', p: '1', s: '0', u: 'bing', f: ',,,', l: 'en-us', vqd,
+  });
+  const apiRes = await fetch(apiUrl, {
+    headers: { 'User-Agent': UA, 'Referer': 'https://duckduckgo.com/', 'Accept': 'application/json' },
+    signal: AbortSignal.timeout(8000),
+  });
+  const json    = await apiRes.json();
+  const results = (json.results || []);
+  // Preferir imágenes anchas y de https
+  const good = results.find(r => r.image?.startsWith('https') && (r.width || 0) >= 600);
+  return good?.image || results.find(r => r.image?.startsWith('https'))?.image || null;
+}
+
 async function fetchCoverImage(keyword) {
-  try {
-    const kw  = encodeURIComponent((keyword || 'minimal abstract').replace(/\s+/g, ','));
-    const url = `https://source.unsplash.com/featured/1400x900/?${kw},minimal`;
+  if (!keyword) return null;
 
-    const controller = new AbortController();
-    const timeout    = setTimeout(() => controller.abort(), 8000);
-
-    const res = await fetch(url, {
-      signal:   controller.signal,
-      redirect: 'follow',
-      headers:  { 'User-Agent': 'CortanaBot/1.0' },
-    });
-    clearTimeout(timeout);
-
-    if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    return buf.length > 4096 ? buf : null;
-  } catch {
-    return null;
+  // A. Unsplash API oficial si hay key en env
+  const uKey = process.env.UNSPLASH_ACCESS_KEY;
+  if (uKey) {
+    try {
+      const r = await fetch(
+        `https://api.unsplash.com/photos/random?query=${encodeURIComponent(keyword)}&orientation=landscape&count=1`,
+        { headers: { 'Authorization': `Client-ID ${uKey}`, 'Accept-Version': 'v1' }, signal: AbortSignal.timeout(7000) }
+      );
+      if (r.ok) {
+        const [photo] = await r.json();
+        if (photo?.urls?.regular) {
+          const buf = await _downloadImage(photo.urls.regular);
+          if (buf) return buf;
+        }
+      }
+    } catch { /* next */ }
   }
+
+  // B. DuckDuckGo image scraping (sin API key)
+  try {
+    const imageUrl = await _getDDGImageUrl(keyword);
+    if (imageUrl) {
+      const buf = await _downloadImage(imageUrl);
+      if (buf) return buf;
+    }
+  } catch { /* fallback */ }
+
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
