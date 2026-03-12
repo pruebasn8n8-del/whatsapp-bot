@@ -91,9 +91,14 @@ function hex(c) { return c.replace('#', ''); }
 // PDF — diseño minimalista moderno
 // ─────────────────────────────────────────────────────────────────────────────
 async function generatePDF(title, sections = []) {
-  const theme    = getTheme(title);
-  const keyword  = titleToKeyword(title);
-  const imgBuf   = await fetchCoverImage(keyword);
+  const theme   = getTheme(title);
+  const keyword = titleToKeyword(title);
+
+  // Fetch portada + imágenes de cada sección en paralelo
+  const [imgBuf, ...sectionImgsBuf] = await Promise.all([
+    fetchCoverImage(keyword),
+    ...sections.map(sec => fetchCoverImage(sec.heading || keyword)),
+  ]);
 
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -241,143 +246,134 @@ async function generatePDF(title, sections = []) {
       });
     }
 
-    // ── PÁGINAS DE CONTENIDO ─────────────────────────────────────────────────
+    // ── PÁGINAS DE CONTENIDO — diseño website/app ────────────────────────────
     for (const [idx, sec] of sections.entries()) {
       doc.addPage({ margin: 0 });
 
-      const pW = doc.page.width;
-      const pH = doc.page.height;
-      const pCW = pW - ML - MR;
+      const pW   = doc.page.width;
+      const pH   = doc.page.height;
+      const pCW  = pW - ML - MR;
+      const IMG_H    = Math.round(pH * 0.38);   // hero image: 38% de la página
+      const FOOTER_H = 34;
+      const CARD_Y   = IMG_H + 14;
+      const CARD_H   = pH - CARD_Y - FOOTER_H - 10;
+      const secImg   = sectionImgsBuf[idx] || null;
 
-      // Fondo blanco
-      doc.rect(0, 0, pW, pH).fill('#ffffff');
-
-      // Barra superior de color primario (3px)
+      // ── Fondo de página con color del tema
       doc.fillOpacity(1);
-      doc.rect(0, 0, pW, 3).fill(theme.primary);
+      doc.rect(0, 0, pW, pH).fill(theme.bg);
 
-      // Header: título del documento + número de página
-      doc.fillColor(theme.primary)
-         .fillOpacity(0.6)
-         .font('Helvetica')
-         .fontSize(7.5)
-         .text(title.toUpperCase().slice(0, 60), ML, 14, {
-           width: pCW - 50,
-           characterSpacing: 0.8,
-         });
-
-      // Número de sección como decoración de fondo — grande, gris muy claro
-      doc.fillColor('#e5e7eb')
-         .fillOpacity(0.08)
-         .font('Helvetica-Bold')
-         .fontSize(120)
-         .text(String(idx + 1).padStart(2, '0'), pW - MR - 90, -12, {
-           width: 110,
-           align: 'right',
-         });
-
-      // Reset opacidad para contenido
-      doc.fillOpacity(1);
-
-      let curY = 52;
-
-      // Título de sección en color primario
-      if (sec.heading) {
-        doc.fillColor(theme.primary)
-           .font('Helvetica-Bold')
-           .fontSize(17)
-           .text(sec.heading, ML, curY, { width: pCW, lineGap: 4 });
-        curY = doc.y + 10;
-
-        // Divisor delgado 0.5px
+      // ── Hero image / bloque de sección (top 38%)
+      if (secImg) {
+        try {
+          doc.save();
+          doc.rect(0, 0, pW, IMG_H).clip();
+          doc.image(secImg, 0, 0, { width: pW });
+          doc.restore();
+        } catch {
+          doc.rect(0, 0, pW, IMG_H).fill(theme.primary);
+        }
+      } else {
+        // Fallback: bloque de color con patrón geométrico
+        doc.rect(0, 0, pW, IMG_H).fill(theme.primary);
+        // Círculos decorativos
         doc.save();
-        doc.fillOpacity(1);
-        doc.rect(ML, curY, pCW, 0.5).fill(theme.primary);
+        doc.fillOpacity(0.12);
+        doc.circle(pW * 0.82, IMG_H * 0.3, 80).fill(theme.accent);
+        doc.circle(pW * 0.92, IMG_H * 0.9, 50).fill('#ffffff');
         doc.restore();
-
-        curY += 16;
       }
 
-      // Contenido principal
+      // Overlay degradado simulado (2 capas: leve arriba, oscuro abajo)
+      doc.save();
+      doc.fillOpacity(0.20);
+      doc.rect(0, 0, pW, IMG_H * 0.45).fill('#000000');
+      doc.restore();
+      doc.save();
+      doc.fillOpacity(0.68);
+      doc.rect(0, IMG_H * 0.45, pW, IMG_H * 0.55).fill('#000000');
+      doc.restore();
+
+      // Chip número de sección (top-right)
+      doc.fillOpacity(1);
+      doc.rect(pW - 54, 0, 54, 30).fill(theme.accent);
+      doc.fillColor('#ffffff')
+         .font('Helvetica-Bold')
+         .fontSize(12)
+         .text(String(idx + 1).padStart(2, '0'), pW - 54, 9, { width: 54, align: 'center' });
+
+      // Línea de acento fina sobre el título
+      doc.fillOpacity(1);
+      doc.rect(ML, IMG_H - 48, 28, 2.5).fill(theme.accent);
+
+      // Título de sección (bottom-left del hero)
+      if (sec.heading) {
+        doc.fillColor('#ffffff')
+           .fillOpacity(1)
+           .font('Helvetica-Bold')
+           .fontSize(19)
+           .text(sec.heading, ML, IMG_H - 42, { width: pCW - 70, lineGap: 3 });
+      }
+
+      // ── Tarjeta de contenido (card blanca flotante sobre fondo tintado)
+      // Sombra simulada
+      doc.save();
+      doc.fillOpacity(0.07);
+      doc.rect(ML + 4, CARD_Y + 4, pCW, CARD_H).fill('#000000');
+      doc.restore();
+
+      // Card blanca
+      doc.fillOpacity(1);
+      doc.rect(ML, CARD_Y, pCW, CARD_H).fill('#ffffff');
+
+      // Borde izquierdo de acento (4px)
+      doc.rect(ML, CARD_Y, 4, CARD_H).fill(theme.accent);
+
+      // ── Contenido dentro de la card
+      const INNER_X = ML + 18;
+      const INNER_W = pCW - 28;
+      const MAX_Y   = CARD_Y + CARD_H - 16;
+      let curY = CARD_Y + 18;
+
       if (sec.content) {
         const paragraphs = sec.content.split(/\n\n+/);
         for (const para of paragraphs) {
           const lines = para.trim();
-          if (!lines) continue;
+          if (!lines || curY >= MAX_Y - 10) continue;
 
-          if (curY > pH - 90) {
-            // Página de overflow
-            doc.addPage({ margin: 0 });
-            doc.rect(0, 0, pW, pH).fill('#ffffff');
-            doc.fillOpacity(1);
-            doc.rect(0, 0, pW, 3).fill(theme.primary);
-            doc.fillColor(theme.primary)
-               .fillOpacity(0.6)
-               .font('Helvetica')
-               .fontSize(7.5)
-               .text(title.toUpperCase().slice(0, 60), ML, 14, {
-                 width: pCW - 50,
-                 characterSpacing: 0.8,
-               });
-            doc.fillOpacity(1);
-            curY = 42;
-          }
-
-          // Lista con viñeta dot
           if (/^[-•*]/.test(lines)) {
-            const items = lines.split('\n').filter(l => l.trim());
-            for (const item of items) {
+            for (const item of lines.split('\n').filter(l => l.trim())) {
+              if (curY >= MAX_Y - 10) break;
               const clean = item.replace(/^[-•*]\s*/, '').trim();
-
-              // Dot pequeño en color acento
-              doc.fillColor(theme.accent)
-                 .fillOpacity(1)
-                 .circle(ML + 4, curY + 5, 2.5)
-                 .fill();
-
-              doc.fillColor('#374151')
-                 .fillOpacity(1)
-                 .font('Helvetica')
-                 .fontSize(10.5)
-                 .text(clean, ML + 14, curY, {
-                   width:   pCW - 14,
-                   align:   'justify',
-                   lineGap: 4,
-                 });
-              curY = doc.y + 7;
+              doc.fillColor(theme.accent).fillOpacity(1)
+                 .circle(INNER_X - 8, curY + 5.5, 2.5).fill();
+              doc.fillColor('#374151').fillOpacity(1)
+                 .font('Helvetica').fontSize(10)
+                 .text(clean, INNER_X, curY, { width: INNER_W, align: 'justify', lineGap: 3 });
+              curY = Math.min(doc.y + 6, MAX_Y);
             }
           } else {
-            doc.fillColor('#374151')
-               .fillOpacity(1)
-               .font('Helvetica')
-               .fontSize(10.5)
-               .text(lines, ML, curY, {
-                 width:   pCW,
-                 align:   'justify',
-                 lineGap: 4,
-               });
-            curY = doc.y + 14;
+            doc.fillColor('#374151').fillOpacity(1)
+               .font('Helvetica').fontSize(10.5)
+               .text(lines, INNER_X, curY, { width: INNER_W, align: 'justify', lineGap: 4 });
+            curY = Math.min(doc.y + 12, MAX_Y);
           }
         }
       }
 
-      // Número de página centrado en el footer
-      const pageLabel = `${idx + 2}`;
-      doc.fillColor('#9ca3af')
-         .fillOpacity(1)
-         .font('Helvetica')
-         .fontSize(8)
-         .text(pageLabel, 0, pH - 26, { width: pW, align: 'center' });
-    }
-
-    // ── PASS FINAL: footer/header en todas las páginas de contenido ──────────
-    const range = doc.bufferedPageRange();
-    const total = range.count;
-    for (let i = 1; i < total; i++) {
-      doc.switchToPage(range.start + i);
-      // El número de página ya se puso dinámicamente arriba,
-      // aquí corregimos el número total real
-      // (nada extra, diseño es suficiente)
+      // ── Footer
+      doc.fillOpacity(1);
+      doc.rect(0, pH - FOOTER_H, pW, 1).fill(theme.primary);
+      doc.save();
+      doc.fillOpacity(0.06);
+      doc.rect(0, pH - FOOTER_H + 1, pW, FOOTER_H - 1).fill(theme.primary);
+      doc.restore();
+      doc.fillColor(theme.primary).fillOpacity(0.7)
+         .font('Helvetica').fontSize(7.5)
+         .text(title.substring(0, 55), ML, pH - FOOTER_H + 10);
+      doc.fillColor(theme.accent).fillOpacity(1)
+         .font('Helvetica-Bold').fontSize(9)
+         .text(String(idx + 2), pW - MR, pH - FOOTER_H + 10, { width: MR - 5, align: 'right' });
     }
 
     doc.end();
