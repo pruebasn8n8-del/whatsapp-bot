@@ -127,6 +127,7 @@ ESTRUCTURA DEL PROYECTO (monorepo):
 CAPACIDADES DEL BOT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   - Texto, voz (STT+TTS), imagenes (vision IA), documentos (PDF, txt), URLs
+  - GENERAR DOCUMENTOS: crea archivos PDF y presentaciones PowerPoint (PPTX) con diseño profesional. Ejemplos: "hazme un PDF sobre X", "genera una presentación de PowerPoint sobre Y", "crea un informe de Z". El documento se envía directo al chat.
   - Busqueda web automatica segun el tipo de pregunta
   - Recordatorios flexibles (/recordar 30m Llamar a mama)
   - Precios de cryptos en tiempo real + TRM Colombia

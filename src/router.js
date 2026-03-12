@@ -786,25 +786,27 @@ function setupRouter(sock, groqService) {
         const docType = await detectDocumentRequest(text, groqService);
         if (docType) {
           await loadPersonalityIfNeeded(jid, groqService);
+          // Reacción de "creando" en el mensaje del usuario
+          try { await sock.sendMessage(jid, { react: { text: '⏳', key: msg.key } }); } catch (_) {}
           await sock.sendPresenceUpdate('composing', jid);
           try {
+            const typeLabel = docType === 'pptx' ? 'PowerPoint' : 'PDF';
             // Pedir estructura JSON a Groq
             const structurePrompt = docType === 'pptx'
-              ? `El usuario pidió: "${text}"\n\nGenera una presentación PowerPoint. Responde SOLO con JSON válido, sin markdown, sin explicación:\n{"title":"...","slides":[{"title":"...","points":["...","...","..."]}]}`
-              : `El usuario pidió: "${text}"\n\nGenera un documento PDF. Responde SOLO con JSON válido, sin markdown, sin explicación:\n{"title":"...","sections":[{"heading":"...","content":"..."},{"heading":"...","content":"..."}]}`;
+              ? `El usuario pidió: "${text}"\n\nGenera una presentación PowerPoint completa y detallada con al menos 6 slides de contenido rico. Responde SOLO con JSON válido, sin markdown:\n{"title":"...","slides":[{"title":"...","points":["punto detallado 1","punto detallado 2","punto detallado 3","punto detallado 4"]}]}`
+              : `El usuario pidió: "${text}"\n\nGenera un documento PDF completo y detallado con al menos 5 secciones bien desarrolladas. Responde SOLO con JSON válido, sin markdown:\n{"title":"...","sections":[{"heading":"...","content":"párrafo extenso con información relevante y detallada..."}]}`;
 
             const structRes = await groqService.client.chat.completions.create({
               model: 'llama-3.3-70b-versatile',
               messages: [
-                { role: 'system', content: 'Eres un asistente que genera estructuras JSON para documentos. Responde SOLO con el JSON, sin texto adicional, sin bloques de código.' },
+                { role: 'system', content: 'Eres un experto generando estructuras JSON para documentos profesionales. El contenido debe ser completo, detallado y bien redactado. Responde SOLO con el JSON, sin texto adicional ni bloques de código.' },
                 { role: 'user', content: structurePrompt },
               ],
-              max_tokens: 3000,
-              temperature: 0.6,
+              max_tokens: 4000,
+              temperature: 0.7,
             });
 
             let raw = (structRes.choices[0]?.message?.content || '').trim();
-            // Limpiar posibles bloques de código
             raw = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
 
             const structure = JSON.parse(raw);
@@ -824,8 +826,10 @@ function setupRouter(sock, groqService) {
               document: fileBuffer,
               mimetype: mimeType,
               fileName,
-              caption: `📄 *${structure.title}*`,
+              caption: `📄 *${structure.title}*\n_${typeLabel} · ${(structure.slides || structure.sections || []).length} secciones_`,
             });
+            // Reacción de éxito
+            try { await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } }); } catch (_) {}
           } catch (docErr) {
             console.error('[Router] Error generando documento:', docErr.message);
             await sock.sendMessage(jid, { text: PREFIX + 'No pude generar el documento. Intenta de nuevo con más detalles.' });
