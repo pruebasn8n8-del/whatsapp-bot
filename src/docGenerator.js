@@ -77,15 +77,25 @@ async function _getDDGImageUrls(keyword, count) {
 }
 
 /**
- * Combina el título principal + heading de sección para una búsqueda contextual.
- * Ej: "fútbol" + "Historia del Balón" → "fútbol balón historia"
+ * Combina el keyword del título + palabras visuales del heading de sección.
+ * Filtra palabras meta/estructurales para no contaminar la búsqueda.
+ * Ej: "Guía de Fútbol" + "Características y Actualizaciones" → "fútbol" (fallback al título)
+ * Ej: "Fútbol" + "Historia del Balón" → "fútbol balón"
+ * Ej: "Rocket League" + "Mecánicas de Juego y Físicas" → "rocket league mecánicas físicas"
  */
 function sectionKeyword(mainTitle, sectionHeading) {
-  const stop = new Set(['de','del','la','el','los','las','un','una','para','con','en','por','que','y','a','o','e','como','desde','hasta','sobre','sus','este','esta','entre','muy','mas','más']);
-  const clean = t => (t || '').toLowerCase().replace(/[^\w\sáéíóúñü]/gi, '').split(/\s+/).filter(w => w.length > 2 && !stop.has(w));
-  const main = clean(mainTitle).slice(0, 2);
-  const sec  = clean(sectionHeading).slice(0, 2);
-  return [...main, ...sec].join(' ') || titleToKeyword(mainTitle);
+  const stop = new Set(['de','del','la','el','los','las','un','una','para','con','en','por','que','y','a','o','e','como','desde','hasta','sobre','sus','este','esta','entre','muy','mas','más','sus','esta','estos','estas']);
+  const clean = t => (t || '').toLowerCase()
+    .replace(/[^\w\sáéíóúñü]/gi, '')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !stop.has(w) && !META_WORDS.has(w));
+
+  const main = clean(mainTitle).slice(0, 2);      // ej: ["rocket", "league"]
+  const sec  = clean(sectionHeading).slice(0, 2); // ej: ["mecanicas", "fisicas"]
+
+  // Si el heading solo tiene palabras meta/estructurales, usar solo el título principal
+  if (sec.length === 0) return main.join(' ') || titleToKeyword(mainTitle);
+  return [...main, ...sec].join(' ');
 }
 
 /**
@@ -151,13 +161,36 @@ async function fetchDocImages(coverKeyword, sectionKeywords) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+// Palabras meta/estructurales que no ayudan en búsquedas de imágenes
+const META_WORDS = new Set([
+  // Documentales
+  'guia','guía','manual','tutorial','curso','completo','completa','introduccion',
+  'introducción','overview','resumen','summary','aprende','aprender','todo','sobre',
+  // Secciones genéricas
+  'caracteristicas','características','actualizaciones','actualizacion','historia',
+  'historico','histórico','general','generalidades','descripcion','descripción',
+  'informacion','información','aspectos','ventajas','desventajas','beneficios',
+  'tipos','comparacion','comparación','impacto','analisis','análisis','conclusion',
+  'conclusión','futuro','perspectivas','contexto','importancia','fundamentos',
+  'bases','principios','conceptos','teoria','teoría','practica','práctica',
+  'updates','features','overview','introduction','history','basics','guide',
+  // Tecnológicos genéricos que contaminan
+  'sistema','sistemas','configuracion','configuración','instalacion','instalación',
+  'proceso','procesos','metodos','métodos','tecnicas','técnicas',
+]);
+
+/**
+ * Extrae el keyword visual del título, filtrando palabras meta/estructurales.
+ * "Guía Completa de Rocket League" → "rocket league"
+ */
 function titleToKeyword(title) {
   const stop = new Set(['de','del','la','el','los','las','un','una','para','con','en','por','que','y','a','o','e','como','desde','hasta','sobre']);
   const words = (title || '')
     .toLowerCase()
-    .replace(/[^\w\s]/g, '')
+    .replace(/[^\w\sáéíóúñü]/gi, '')
     .split(/\s+/)
-    .filter(w => w.length > 2 && !stop.has(w));
+    .filter(w => w.length > 2 && !stop.has(w) && !META_WORDS.has(w));
   return words.slice(0, 3).join(' ') || 'abstract minimal';
 }
 
