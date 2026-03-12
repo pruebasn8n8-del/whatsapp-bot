@@ -711,7 +711,7 @@ function _pdfCuriosityBox(doc, text, x, w, y, theme) {
 function _pdfReferencesPage(doc, references, title, theme) {
   doc.addPage({ margin: 0 });
   const W = doc.page.width, H = doc.page.height;
-  const ML = 60, MR = 60, CW = W - ML - MR, FOOTER_H = 32;
+  const ML = 72, MR = 72, CW = W - ML - MR, FOOTER_H = 48;
 
   doc.fillOpacity(1).rect(0, 0, W, H).fill('#ffffff');
   doc.rect(0, 0, W, 2).fill(theme.primary);
@@ -719,7 +719,7 @@ function _pdfReferencesPage(doc, references, title, theme) {
 
   // Header
   doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(18)
-     .text('Referencias', ML, 28, { width: CW });
+     .text('Referencias', ML, 54, { width: CW });
   const underY = doc.y + 4;
   doc.fillOpacity(1).rect(ML, underY, 48, 2).fill(theme.accent);
 
@@ -756,13 +756,13 @@ function _pdfReferencesPage(doc, references, title, theme) {
 // ── PDF shared footer ─────────────────────────────────────────────────────────
 function _pdfFooter(doc, title, pageNum, theme) {
   const W = doc.page.width, H = doc.page.height;
-  const ML = 60, MR = 60, FOOTER_H = 32;
+  const ML = 72, MR = 72, FOOTER_H = 48;
   doc.fillOpacity(1).rect(0, H - FOOTER_H, W, 0.8).fill(theme.primary);
   doc.save().fillOpacity(0.05).rect(0, H - FOOTER_H + 0.8, W, FOOTER_H - 0.8).fill(theme.primary).restore();
   doc.fillColor(theme.primary).fillOpacity(0.65).font('Helvetica').fontSize(7.5)
-     .text(title.substring(0, 55), ML, H - FOOTER_H + 9);
+     .text(title.substring(0, 55), ML, H - FOOTER_H + 18);
   doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(9)
-     .text(String(pageNum), W - MR, H - FOOTER_H + 9, { width: MR - 5, align: 'right' });
+     .text(String(pageNum), W - MR, H - FOOTER_H + 18, { width: MR - 5, align: 'right' });
 }
 
 // ── PDF: VISUAL style ─────────────────────────────────────────────────────────
@@ -808,8 +808,8 @@ function _pdfCoverVisual(doc, title, sections, theme, imgBuf) {
 
 function _pdfSectionVisual(doc, sec, idx, title, theme, imgBuf) {
   const W = doc.page.width, H = doc.page.height;
-  const ML = 60, MR = 60;
-  const FOOTER_H = 34;
+  const ML = 72, MR = 72;
+  const FOOTER_H = 48;
   const IMG_H    = Math.round(H * 0.32);
   const CARD_Y   = IMG_H + 14;
   const CARD_H   = H - CARD_Y - FOOTER_H - 10;
@@ -902,8 +902,8 @@ function _pdfCoverTechnical(doc, title, sections, theme) {
 
 function _pdfSectionTechnical(doc, sec, idx, title, theme) {
   const W = doc.page.width, H = doc.page.height;
-  const ML = 60, MR = 60, CW = W - ML - MR, FOOTER_H = 32;
-  const CHIP_Y = 28; // margen superior del chip (antes era 14)
+  const ML = 72, MR = 72, CW = W - ML - MR, FOOTER_H = 48;
+  const CHIP_Y = 54; // margen superior del chip (APA 1 pulgada)
   const CHIP = 52;
 
   doc.fillOpacity(1).rect(0, 0, W, H).fill('#ffffff');
@@ -964,8 +964,8 @@ function _pdfCoverClean(doc, title, sections, theme) {
 
 function _pdfSectionClean(doc, sec, idx, title, theme) {
   const W = doc.page.width, H = doc.page.height;
-  const ML = 60, MR = 60, CW = W - ML - MR, FOOTER_H = 32;
-  const HDR_H = 68; // altura de la banda de cabecera
+  const ML = 72, MR = 72, CW = W - ML - MR, FOOTER_H = 48;
+  const HDR_H = 96; // altura de la banda de cabecera (APA 1 pulgada)
 
   doc.fillOpacity(1).rect(0, 0, W, H).fill('#ffffff');
   doc.rect(0, 0, 5, H).fill(theme.accent);
@@ -974,10 +974,10 @@ function _pdfSectionClean(doc, sec, idx, title, theme) {
 
   // Número y título con margen superior cómodo
   doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(10)
-     .text(String(idx + 1).padStart(2, '0'), ML, 28);
+     .text(String(idx + 1).padStart(2, '0'), ML, 54);
   if (sec.heading) {
     doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(14)
-       .text(_cleanForRender(sec.heading), ML + 28, 26, { width: CW - 28, lineGap: 2 });
+       .text(_cleanForRender(sec.heading), ML + 28, 52, { width: CW - 28, lineGap: 2 });
   }
   doc.fillOpacity(1).rect(ML, HDR_H, CW, 0.5).fill(theme.primary);
   _pdfRichContent(doc, sec, ML, CW, HDR_H + 14, H - FOOTER_H - 12, theme);
