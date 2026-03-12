@@ -154,13 +154,14 @@ async function getOnboardingState(jid) {
     }
   }
   const contact = await getContact(jid);
-  if (contact?.onboarding_done) return 'done';
+  // Revisar onboarding_step ANTES de onboarding_done:
+  // /configurar puede activar un step incluso en usuarios que ya terminaron el onboarding.
   if (contact?.onboarding_step) {
     const updatedAt = contact.updated_at ? new Date(contact.updated_at).getTime() : 0;
     const stale = Date.now() - updatedAt > 24 * 60 * 60 * 1000;
     if (stale) {
-      await upsertContact(jid, { onboarding_step: null, onboarding_data: null, onboarding_done: false });
-      return 'new';
+      await upsertContact(jid, { onboarding_step: null, onboarding_data: null });
+      return contact?.onboarding_done ? 'done' : 'new';
     }
     _sessions.set(jid, {
       step: contact.onboarding_step,
@@ -169,6 +170,7 @@ async function getOnboardingState(jid) {
     });
     return 'in_progress';
   }
+  if (contact?.onboarding_done) return 'done';
   return 'new';
 }
 
