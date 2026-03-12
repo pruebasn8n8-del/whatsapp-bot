@@ -804,13 +804,22 @@ function setupRouter(sock, groqService) {
                 { role: 'user', content: structurePrompt },
               ],
               max_tokens: 4000,
-              temperature: 0.7,
+              temperature: 0.4,
             });
 
             let raw = (structRes.choices[0]?.message?.content || '').trim();
             raw = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
 
-            const structure = JSON.parse(raw);
+            let structure;
+            try {
+              structure = JSON.parse(raw);
+            } catch {
+              // Reparar JSON con saltos de línea literales dentro de strings o trailing commas
+              const repaired = raw
+                .replace(/\r\n|\r|\n/g, ' ')
+                .replace(/,\s*([}\]])/g, '$1');
+              structure = JSON.parse(repaired);
+            }
             let fileBuffer, fileName, mimeType;
 
             const docOpts = { style: structure.style || 'clean', useImages: !!structure.use_images };
