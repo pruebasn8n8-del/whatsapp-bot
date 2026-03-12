@@ -83,7 +83,6 @@ function _looksLikeDocument(candidate) {
 
 /**
  * Cuántas palabras del keyword aparecen en el título/URL del candidato.
- * Cuanto mayor el score, más relevante es la imagen al tema.
  */
 function _scoreCandidate(candidate, keyword) {
   const kws = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 3);
@@ -93,8 +92,7 @@ function _scoreCandidate(candidate, keyword) {
 }
 
 /**
- * Trae hasta `count` candidatos de DDG con metadata completa (título, url, imagen).
- * Filtra dominios bloqueados y mínimo ancho 600px.
+ * Trae hasta `count` candidatos de DDG con metadata completa.
  */
 async function _getDDGCandidates(keyword, count, offset = 0) {
   const q = keyword;
@@ -127,10 +125,6 @@ async function _getDDGCandidates(keyword, count, offset = 0) {
 
 /**
  * Combina el keyword del título + palabras visuales del heading de sección.
- * Filtra palabras meta/estructurales para no contaminar la búsqueda.
- * Ej: "Guía de Fútbol" + "Características y Actualizaciones" → "fútbol" (fallback al título)
- * Ej: "Fútbol" + "Historia del Balón" → "fútbol balón"
- * Ej: "Rocket League" + "Mecánicas de Juego y Físicas" → "rocket league mecánicas físicas"
  */
 function sectionKeyword(mainTitle, sectionHeading) {
   const stop = new Set(['de','del','la','el','los','las','un','una','para','con','en','por','que','y','a','o','e','como','desde','hasta','sobre','sus','este','esta','entre','muy','mas','más','sus','esta','estos','estas']);
@@ -139,26 +133,19 @@ function sectionKeyword(mainTitle, sectionHeading) {
     .split(/\s+/)
     .filter(w => w.length > 2 && !stop.has(w) && !META_WORDS.has(w));
 
-  const main = clean(mainTitle).slice(0, 2);      // ej: ["rocket", "league"]
-  const sec  = clean(sectionHeading).slice(0, 2); // ej: ["mecanicas", "fisicas"]
+  const main = clean(mainTitle).slice(0, 2);
+  const sec  = clean(sectionHeading).slice(0, 2);
 
-  // Si el heading solo tiene palabras meta/estructurales, usar solo el título principal
   if (sec.length === 0) return main.join(' ') || titleToKeyword(mainTitle);
   return [...main, ...sec].join(' ');
 }
 
 /**
- * Busca imágenes para todo el documento con keywords específicos por sección
- * y deduplicación por URL — si la imagen #1 ya fue usada, toma la #2, etc.
- *
- * coverKeyword: keyword para la portada (null = sin imagen de portada)
- * sectionKeywords: array de keywords uno por sección/slide
- * Retorna: { coverBuf, sectionBufs[] }
+ * Busca imágenes para todo el documento con keywords específicos por sección.
  */
 async function fetchDocImages(coverKeyword, sectionKeywords) {
   const allKeywords = coverKeyword ? [coverKeyword, ...sectionKeywords] : [...sectionKeywords];
 
-  // A. Unsplash: cada keyword busca por separado → imágenes distintas por naturaleza
   const uKey = process.env.UNSPLASH_ACCESS_KEY;
   if (uKey) {
     try {
@@ -184,14 +171,11 @@ async function fetchDocImages(coverKeyword, sectionKeywords) {
     } catch {}
   }
 
-  // B. DDG: candidatos con metadata completa para scoring + deduplicación
   const candidateLists = await Promise.allSettled(
     allKeywords.map(kw => _getDDGCandidates(kw, 18))
   );
 
   const usedUrls = new Set();
-
-  // Selección por keyword: en serie para que la deduplicación sea consistente
   const selectedUrls = [];
   for (let ki = 0; ki < allKeywords.length; ki++) {
     const keyword    = allKeywords[ki];
@@ -202,11 +186,9 @@ async function fetchDocImages(coverKeyword, sectionKeywords) {
       .map(c => ({ ...c, score: _scoreCandidate(c, keyword) }))
       .sort((a, b) => b.score - a.score);
 
-    // 1. Relevante y no duplicado
     const pick = scored.find(c => c.score > 0 && !usedUrls.has(c.image));
     if (pick) { usedUrls.add(pick.image); selectedUrls.push(pick.image); continue; }
 
-    // 2. Pool agotado: pedir segunda página (offset 20) con mismo keyword
     try {
       const more = await _getDDGCandidates(keyword, 18, 20);
       const morePick = more
@@ -217,14 +199,12 @@ async function fetchDocImages(coverKeyword, sectionKeywords) {
       if (morePick) { usedUrls.add(morePick.image); selectedUrls.push(morePick.image); continue; }
     } catch {}
 
-    // 3. Último fallback: cualquier no duplicado del primer batch (score 0 ok)
     const fallback = scored.find(c => !usedUrls.has(c.image));
     if (fallback) { usedUrls.add(fallback.image); selectedUrls.push(fallback.image); continue; }
 
     selectedUrls.push(null);
   }
 
-  // Descargar las seleccionadas en paralelo
   const bufs = await Promise.allSettled(
     selectedUrls.map(url => url ? _downloadImage(url) : Promise.resolve(null))
   );
@@ -237,12 +217,9 @@ async function fetchDocImages(coverKeyword, sectionKeywords) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-// Palabras meta/estructurales que no ayudan en búsquedas de imágenes
 const META_WORDS = new Set([
-  // Documentales
   'guia','guía','manual','tutorial','curso','completo','completa','introduccion',
   'introducción','overview','resumen','summary','aprende','aprender','todo','sobre',
-  // Secciones genéricas
   'caracteristicas','características','actualizaciones','actualizacion','historia',
   'historico','histórico','general','generalidades','descripcion','descripción',
   'informacion','información','aspectos','ventajas','desventajas','beneficios',
@@ -250,15 +227,10 @@ const META_WORDS = new Set([
   'conclusión','futuro','perspectivas','contexto','importancia','fundamentos',
   'bases','principios','conceptos','teoria','teoría','practica','práctica',
   'updates','features','overview','introduction','history','basics','guide',
-  // Tecnológicos genéricos que contaminan
   'sistema','sistemas','configuracion','configuración','instalacion','instalación',
   'proceso','procesos','metodos','métodos','tecnicas','técnicas',
 ]);
 
-/**
- * Extrae el keyword visual del título, filtrando palabras meta/estructurales.
- * "Guía Completa de Rocket League" → "rocket league"
- */
 function titleToKeyword(title) {
   const stop = new Set(['de','del','la','el','los','las','un','una','para','con','en','por','que','y','a','o','e','como','desde','hasta','sobre']);
   const words = (title || '')
@@ -275,29 +247,366 @@ function fmtDate() {
 
 function hex(c) { return (c || '').replace('#', ''); }
 
-// ── PDF shared text renderer ──────────────────────────────────────────────────
-function _pdfText(doc, content, x, w, startY, maxY, theme) {
-  let curY = startY;
-  for (const para of (content || '').split(/\n\n+/)) {
-    const text = para.trim();
-    if (!text || curY >= maxY - 10) continue;
-    if (/^[-•*]/.test(text)) {
-      for (const item of text.split('\n').filter(l => l.trim())) {
-        if (curY >= maxY - 10) break;
-        const clean = item.replace(/^[-•*]\s*/, '').trim();
-        doc.fillColor(theme.accent).fillOpacity(1).circle(x - 5, curY + 5.5, 2.5).fill();
-        doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10)
-           .text(clean, x, curY, { width: w, align: 'justify', lineGap: 3 });
-        curY = Math.min(doc.y + 6, maxY);
-      }
-    } else {
-      doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
-         .text(text, x, curY, { width: w, align: 'justify', lineGap: 4 });
-      curY = Math.min(doc.y + 12, maxY);
-    }
+// ── Bold segment splitter ────────────────────────────────────────────────────
+/**
+ * Divide un string en segmentos {text, bold} según **texto**.
+ * Ej: "hola **mundo** aquí" → [{text:"hola ",bold:false},{text:"mundo",bold:true},{text:" aquí",bold:false}]
+ */
+function splitBoldSegments(line) {
+  const segments = [];
+  const re = /\*\*(.+?)\*\*/g;
+  let last = 0, m;
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > last) segments.push({ text: line.slice(last, m.index), bold: false });
+    segments.push({ text: m[1], bold: true });
+    last = m.index + m[0].length;
   }
+  if (last < line.length) segments.push({ text: line.slice(last), bold: false });
+  return segments.length > 0 ? segments : [{ text: line, bold: false }];
 }
 
+// ── PDF rich content renderer (reemplaza _pdfText) ──────────────────────────
+/**
+ * Renderiza sección completa: content con jerarquía tipográfica + tabla + flowchart + curiosity.
+ * Retorna la Y final.
+ */
+function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
+  let curY = startY;
+  const content = (section.content || '').trim();
+
+  // Procesar línea por línea
+  const lines = content.split('\n');
+  let pi = 0;
+  while (pi < lines.length) {
+    if (curY >= maxY - 20) break;
+    const raw = lines[pi];
+    const line = raw.trimEnd();
+    pi++;
+
+    if (!line.trim()) {
+      curY = Math.min(curY + 6, maxY);
+      continue;
+    }
+
+    // ## Subtítulo H2
+    const h2 = line.match(/^##\s+(.+)/);
+    if (h2) {
+      if (curY + 30 > maxY) break;
+      curY = Math.min(curY + 6, maxY);
+      doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(13)
+         .text(h2[1], x, curY, { width: w, lineGap: 2 });
+      curY = doc.y + 2;
+      // Subrayado accent
+      if (curY + 3 <= maxY) {
+        doc.fillOpacity(1).rect(x, curY, 32, 2).fill(theme.accent);
+        curY += 7;
+      }
+      continue;
+    }
+
+    // ### Sub-subtítulo H3
+    const h3 = line.match(/^###\s+(.+)/);
+    if (h3) {
+      if (curY + 22 > maxY) break;
+      curY = Math.min(curY + 4, maxY);
+      doc.fillColor(theme.primary).fillOpacity(1).font('Helvetica-Bold').fontSize(11.5)
+         .text(h3[1], x, curY, { width: w, lineGap: 2 });
+      curY = doc.y + 6;
+      continue;
+    }
+
+    // 1. Lista numerada
+    const num = line.match(/^(\d+)\.\s+(.+)/);
+    if (num) {
+      if (curY + 20 > maxY) break;
+      const numStr = num[1] + '.';
+      const numW = 20;
+      doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(10.5)
+         .text(numStr, x, curY, { width: numW, lineBreak: false });
+      doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
+         .text(num[2], x + numW + 2, curY, { width: w - numW - 2, lineGap: 3 });
+      curY = Math.min(doc.y + 4, maxY);
+      continue;
+    }
+
+    // Sub-bullet anidado (2 espacios + -)
+    const subBullet = line.match(/^ {2,}[-•*]\s+(.+)/);
+    if (subBullet) {
+      if (curY + 18 > maxY) break;
+      const ix = x + 18;
+      doc.fillColor('#9CA3AF').fillOpacity(1).circle(ix - 6, curY + 5, 2).fill();
+      doc.fillColor('#6B7280').fillOpacity(1).font('Helvetica').fontSize(9.5)
+         .text(subBullet[1], ix, curY, { width: w - 20, lineGap: 2 });
+      curY = Math.min(doc.y + 3, maxY);
+      continue;
+    }
+
+    // Bullet principal
+    const bullet = line.match(/^[-•*]\s+(.+)/);
+    if (bullet) {
+      if (curY + 20 > maxY) break;
+      doc.fillColor(theme.accent).fillOpacity(1).circle(x - 5, curY + 5.5, 2.5).fill();
+      doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10)
+         .text(bullet[1], x, curY, { width: w, lineGap: 3 });
+      curY = Math.min(doc.y + 4, maxY);
+      continue;
+    }
+
+    // Línea completamente en negrita **texto**
+    if (/^\*\*.+\*\*$/.test(line.trim())) {
+      if (curY + 18 > maxY) break;
+      const clean = line.trim().replace(/^\*\*|\*\*$/g, '');
+      doc.fillColor('#1F2937').fillOpacity(1).font('Helvetica-Bold').fontSize(10.5)
+         .text(clean, x, curY, { width: w, lineGap: 3 });
+      curY = Math.min(doc.y + 6, maxY);
+      continue;
+    }
+
+    // Párrafo normal (puede tener negrita inline)
+    if (curY + 14 > maxY) break;
+    const segs = splitBoldSegments(line);
+    const hasBold = segs.some(s => s.bold);
+    if (hasBold) {
+      segs.forEach((seg, i) => {
+        const isLast = i === segs.length - 1;
+        if (!seg.text) return;
+        doc.fillColor('#374151').fillOpacity(1)
+           .font(seg.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10.5)
+           .text(seg.text, i === 0 ? x : undefined, i === 0 ? curY : undefined, {
+             continued: !isLast,
+             width: w,
+             lineGap: 4,
+             align: 'justify',
+           });
+      });
+      curY = Math.min(doc.y + 8, maxY);
+    } else {
+      doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
+         .text(line, x, curY, { width: w, align: 'justify', lineGap: 4 });
+      curY = Math.min(doc.y + 8, maxY);
+    }
+  }
+
+  // Tabla
+  if (section.table?.headers?.length > 0 && curY + 40 < maxY) {
+    curY = _pdfTable(doc, section.table, x, w, curY + 12, maxY, theme);
+  }
+  // Flowchart
+  if (section.flowchart?.steps?.length > 0 && curY + 60 < maxY) {
+    curY = _pdfFlowchart(doc, section.flowchart, x, w, curY + 12, maxY, theme);
+  }
+  // Curiosity box
+  if (section.curiosity && curY + 40 < maxY) {
+    curY = _pdfCuriosityBox(doc, section.curiosity, x, w, curY + 12, theme);
+  }
+
+  return curY;
+}
+
+// ── PDF Table Renderer ───────────────────────────────────────────────────────
+function _pdfTable(doc, table, x, w, y, maxY, theme) {
+  const { headers = [], rows = [] } = table;
+  if (!headers.length) return y;
+
+  const colW  = w / headers.length;
+  const ROW_H = 22;
+  const HDR_H = 26;
+  const totalH = HDR_H + rows.length * ROW_H + 4;
+
+  if (y + totalH > maxY) return y;
+
+  // Header row
+  doc.fillOpacity(1).rect(x, y, w, HDR_H).fill(theme.primary);
+  headers.forEach((h, ci) => {
+    doc.fillColor('#ffffff').fillOpacity(1).font('Helvetica-Bold').fontSize(9)
+       .text(String(h), x + ci * colW + 6, y + 7, { width: colW - 12, align: 'left', lineBreak: false });
+  });
+
+  // Data rows
+  rows.forEach((row, ri) => {
+    const ry = y + HDR_H + ri * ROW_H;
+    const bg = ri % 2 === 0 ? '#ffffff' : (theme.bg || '#F9FAFB');
+    doc.fillOpacity(1).rect(x, ry, w, ROW_H).fill(bg);
+
+    // Separator line
+    doc.save()
+       .strokeColor(theme.primary).strokeOpacity(0.18).lineWidth(0.5)
+       .moveTo(x, ry + ROW_H).lineTo(x + w, ry + ROW_H).stroke()
+       .restore();
+
+    (row || []).forEach((cell, ci) => {
+      doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(9)
+         .text(String(cell ?? ''), x + ci * colW + 6, ry + 6,
+               { width: colW - 12, align: 'left', lineBreak: false });
+    });
+  });
+
+  // Outer border
+  doc.save()
+     .strokeColor(theme.primary).strokeOpacity(0.30).lineWidth(0.8)
+     .rect(x, y, w, HDR_H + rows.length * ROW_H).stroke()
+     .restore();
+
+  // Vertical column dividers
+  for (let ci = 1; ci < headers.length; ci++) {
+    doc.save()
+       .strokeColor(theme.primary).strokeOpacity(0.15).lineWidth(0.5)
+       .moveTo(x + ci * colW, y).lineTo(x + ci * colW, y + HDR_H + rows.length * ROW_H).stroke()
+       .restore();
+  }
+
+  return y + HDR_H + rows.length * ROW_H + 14;
+}
+
+// ── PDF Flowchart Renderer ───────────────────────────────────────────────────
+function _pdfFlowchart(doc, flowchart, x, w, y, maxY, theme) {
+  const { steps = [], decision_idx = -1 } = flowchart;
+  if (!steps.length) return y;
+
+  const BOX_W  = Math.min(200, w - 20);
+  const BOX_H  = 34;
+  const ARROW_H = 18;
+  const totalH = steps.length * (BOX_H + ARROW_H) + 16;
+
+  if (y + totalH > maxY) return y;
+
+  const centerX = x + w / 2;
+  let curY = y + 8;
+
+  steps.forEach((step, i) => {
+    const boxX      = centerX - BOX_W / 2;
+    const boxY      = curY;
+    const isDecision = i === decision_idx;
+    const isEndpoint = i === 0 || i === steps.length - 1;
+
+    if (isDecision) {
+      // Diamante
+      const cx = centerX, cy = boxY + BOX_H / 2;
+      const dx = BOX_W / 2 + 4, dy = BOX_H / 2 + 4;
+      doc.save()
+         .fillOpacity(1)
+         .polygon([cx, cy - dy], [cx + dx, cy], [cx, cy + dy], [cx - dx, cy])
+         .fill(theme.accent);
+      doc.polygon([cx, cy - dy], [cx + dx, cy], [cx, cy + dy], [cx - dx, cy])
+         .stroke(theme.primary);
+      doc.restore();
+      doc.fillColor('#ffffff').fillOpacity(1).font('Helvetica-Bold').fontSize(8)
+         .text(String(step), cx - dx + 8, cy - 8,
+               { width: dx * 2 - 16, align: 'center', lineBreak: false });
+    } else {
+      // Caja redondeada
+      const fillC = isEndpoint ? theme.primary : '#ffffff';
+      const textC = isEndpoint ? '#ffffff' : theme.dark;
+      doc.save()
+         .fillOpacity(1)
+         .roundedRect(boxX, boxY, BOX_W, BOX_H, 5)
+         .fill(fillC);
+      doc.roundedRect(boxX, boxY, BOX_W, BOX_H, 5)
+         .stroke(theme.primary);
+      doc.restore();
+      doc.fillColor(textC).fillOpacity(1).font('Helvetica').fontSize(9)
+         .text(String(step), boxX + 8, boxY + BOX_H / 2 - 7,
+               { width: BOX_W - 16, align: 'center', lineBreak: false });
+    }
+
+    // Flecha hacia el siguiente paso
+    if (i < steps.length - 1) {
+      const arrowTopY = boxY + BOX_H;
+      const arrowBotY = arrowTopY + ARROW_H;
+      doc.save()
+         .strokeColor(theme.primary).strokeOpacity(0.80).lineWidth(1.2)
+         .moveTo(centerX, arrowTopY).lineTo(centerX, arrowBotY - 6).stroke()
+         .restore();
+      // Triángulo arrowhead (sentido horario = downward)
+      doc.save()
+         .fillOpacity(0.80).fillColor(theme.primary)
+         .polygon(
+           [centerX, arrowBotY],
+           [centerX - 5, arrowBotY - 7],
+           [centerX + 5, arrowBotY - 7]
+         )
+         .fill();
+      doc.restore();
+    }
+
+    curY = boxY + BOX_H + ARROW_H;
+  });
+
+  return curY + 10;
+}
+
+// ── PDF Curiosity Box ────────────────────────────────────────────────────────
+function _pdfCuriosityBox(doc, text, x, w, y, theme) {
+  if (!text) return y;
+  const BORDER = 4, PAD = 12, LABEL_H = 18;
+  const estLines = Math.ceil(text.length / ((w - PAD * 2 - BORDER) / 5.5));
+  const contentH = LABEL_H + 8 + estLines * 14 + PAD;
+  const totalH   = contentH + PAD;
+
+  // Fondo semitransparente
+  doc.save().fillOpacity(0.06).rect(x + BORDER, y, w - BORDER, totalH).fill(theme.accent).restore();
+  // Barra izquierda
+  doc.fillOpacity(1).rect(x, y, BORDER, totalH).fill(theme.accent);
+
+  // Label
+  doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(9.5)
+     .text('💡 Dato curioso', x + BORDER + PAD, y + PAD, { width: w - BORDER - PAD * 2 });
+
+  // Texto
+  doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(9.5)
+     .text(text, x + BORDER + PAD, y + PAD + LABEL_H + 2,
+           { width: w - BORDER - PAD * 2, lineGap: 3 });
+
+  return y + totalH + 8;
+}
+
+// ── PDF References Page ──────────────────────────────────────────────────────
+function _pdfReferencesPage(doc, references, title, theme) {
+  doc.addPage({ margin: 0 });
+  const W = doc.page.width, H = doc.page.height;
+  const ML = 60, MR = 60, CW = W - ML - MR, FOOTER_H = 32;
+
+  doc.fillOpacity(1).rect(0, 0, W, H).fill('#ffffff');
+  doc.rect(0, 0, W, 2).fill(theme.primary);
+  doc.rect(0, 0, 5, H).fill(theme.accent);
+
+  // Header
+  doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(18)
+     .text('Referencias', ML, 28, { width: CW });
+  const underY = doc.y + 4;
+  doc.fillOpacity(1).rect(ML, underY, 48, 2).fill(theme.accent);
+
+  let curY = underY + 18;
+  const MAXREF_Y = H - FOOTER_H - 16;
+
+  references.forEach((ref, i) => {
+    if (curY >= MAXREF_Y) return;
+    const apa = `${ref.author || 'Autor desconocido'} (${ref.year || 's.f.'}). ${ref.title || ''}. ${ref.publisher || ''}`;
+
+    // Badge número
+    doc.save().fillOpacity(1).rect(ML, curY, 18, 18).fill(theme.bg || '#F9FAFB').restore();
+    doc.fillColor(theme.primary).fillOpacity(1).font('Helvetica-Bold').fontSize(8)
+       .text(String(i + 1), ML + 1, curY + 4, { width: 16, align: 'center', lineBreak: false });
+
+    // Texto APA
+    doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(9)
+       .text(apa, ML + 24, curY, { width: CW - 24, lineGap: 2 });
+    curY = doc.y + 2;
+
+    // URL en color accent
+    if (ref.url) {
+      doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica').fontSize(8.5)
+         .text(ref.url, ML + 24, curY, { width: CW - 24, lineGap: 2 });
+      curY = doc.y + 10;
+    } else {
+      curY += 8;
+    }
+  });
+
+  _pdfFooter(doc, title, '—', theme);
+}
+
+// ── PDF shared footer ─────────────────────────────────────────────────────────
 function _pdfFooter(doc, title, pageNum, theme) {
   const W = doc.page.width, H = doc.page.height;
   const ML = 60, MR = 60, FOOTER_H = 32;
@@ -354,16 +663,13 @@ function _pdfSectionVisual(doc, sec, idx, title, theme, imgBuf) {
   const W = doc.page.width, H = doc.page.height;
   const ML = 60, MR = 60;
   const FOOTER_H = 34;
-  const IMG_H    = Math.round(H * 0.38);
+  const IMG_H    = Math.round(H * 0.32);
   const CARD_Y   = IMG_H + 14;
   const CARD_H   = H - CARD_Y - FOOTER_H - 10;
   const pCW      = W - ML - MR;
 
-  // Fondo tintado
   doc.fillOpacity(1).rect(0, 0, W, H).fill(theme.bg);
 
-  // Hero image — cover: [W, IMG_H] recorta sin distorsionar
-  // doc.restore() SIEMPRE se llama para liberar el clip, aunque image() falle
   if (imgBuf) {
     let imgOk = false;
     doc.save();
@@ -381,28 +687,24 @@ function _pdfSectionVisual(doc, sec, idx, title, theme, imgBuf) {
     doc.restore();
   }
 
-  // Overlay degradado sobre el hero
   doc.save().fillOpacity(0.22).rect(0, 0, W, IMG_H * 0.45).fill('#000000').restore();
   doc.save().fillOpacity(0.65).rect(0, IMG_H * 0.45, W, IMG_H * 0.55).fill('#000000').restore();
 
-  // Chip número sección
   doc.fillOpacity(1).rect(W - 54, 0, 54, 30).fill(theme.accent);
   doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(12)
      .text(String(idx + 1).padStart(2, '0'), W - 54, 9, { width: 54, align: 'center' });
 
-  // Línea + título sobre el hero
   doc.fillOpacity(1).rect(ML, IMG_H - 50, 28, 2.5).fill(theme.accent);
   if (sec.heading) {
     doc.fillColor('#ffffff').fillOpacity(1).font('Helvetica-Bold').fontSize(19)
        .text(sec.heading, ML, IMG_H - 43, { width: pCW - 70, lineGap: 3 });
   }
 
-  // Card flotante con sombra
   doc.save().fillOpacity(0.07).rect(ML + 4, CARD_Y + 4, pCW, CARD_H).fill('#000000').restore();
   doc.fillOpacity(1).rect(ML, CARD_Y, pCW, CARD_H).fill('#ffffff');
   doc.rect(ML, CARD_Y, 4, CARD_H).fill(theme.accent);
 
-  _pdfText(doc, sec.content, ML + 18, pCW - 28, CARD_Y + 18, CARD_Y + CARD_H - 14, theme);
+  _pdfRichContent(doc, sec, ML + 18, pCW - 28, CARD_Y + 18, CARD_Y + CARD_H - 14, theme);
   _pdfFooter(doc, title, idx + 2, theme);
 }
 
@@ -416,7 +718,6 @@ function _pdfCoverTechnical(doc, title, sections, theme) {
   doc.rect(SPLIT, 0, W - SPLIT, H).fill(theme.primary);
   doc.rect(0, 0, SPLIT, 8).fill(theme.accent);
 
-  // Dot grid on right panel
   doc.save().fillOpacity(0.14);
   for (let row = 0; row < 14; row++) {
     for (let col = 0; col < 5; col++) {
@@ -425,13 +726,11 @@ function _pdfCoverTechnical(doc, title, sections, theme) {
   }
   doc.restore();
 
-  // Big count on right
   doc.fillColor('#ffffff').fillOpacity(0.90).font('Helvetica-Bold').fontSize(80)
      .text(String(sections.length).padStart(2, '0'), SPLIT + 10, H * 0.27, { width: W - SPLIT - 14 });
   doc.fillColor('#ffffff').fillOpacity(0.40).font('Helvetica').fontSize(9)
      .text('SECCIONES', SPLIT + 14, H * 0.27 + 90, { characterSpacing: 3 });
 
-  // Title left
   doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(28)
      .text(title, ML, H * 0.29, { width: SPLIT - ML - 16, lineGap: 7 });
   doc.fillColor(theme.primary).fillOpacity(0.75).font('Helvetica').fontSize(10)
@@ -461,12 +760,10 @@ function _pdfSectionTechnical(doc, sec, idx, title, theme) {
   doc.fillOpacity(1).rect(0, 0, W, H).fill('#ffffff');
   doc.rect(0, 0, W, 4).fill(theme.primary);
 
-  // Watermark step number
   doc.save().fillOpacity(0.04).fillColor(theme.primary).font('Helvetica-Bold').fontSize(210)
      .text(String(idx + 1), W * 0.38, H * 0.12, { width: W * 0.58 });
   doc.restore();
 
-  // Step chip
   const CHIP = 52;
   doc.fillOpacity(1).rect(ML, 14, CHIP, CHIP).fill(theme.accent);
   doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18)
@@ -478,7 +775,7 @@ function _pdfSectionTechnical(doc, sec, idx, title, theme) {
   }
 
   doc.fillOpacity(1).rect(ML, 78, CW, 0.8).fill(theme.primary);
-  _pdfText(doc, sec.content, ML, CW, 88, H - FOOTER_H - 12, theme);
+  _pdfRichContent(doc, sec, ML, CW, 88, H - FOOTER_H - 12, theme);
   _pdfFooter(doc, title, idx + 2, theme);
 }
 
@@ -524,7 +821,6 @@ function _pdfSectionClean(doc, sec, idx, title, theme) {
   doc.rect(0, 0, 5, H).fill(theme.accent);
   doc.rect(0, 0, W, 2).fill(theme.primary);
 
-  // Light header band
   doc.save().fillOpacity(1).rect(0, 2, W, 44).fill(theme.bg || '#F9FAFB').restore();
 
   doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(10)
@@ -534,18 +830,16 @@ function _pdfSectionClean(doc, sec, idx, title, theme) {
        .text(sec.heading, ML + 28, 11, { width: CW - 28, lineGap: 2 });
   }
   doc.fillOpacity(1).rect(ML, 52, CW, 0.5).fill(theme.primary);
-  _pdfText(doc, sec.content, ML, CW, 62, H - FOOTER_H - 12, theme);
+  _pdfRichContent(doc, sec, ML, CW, 62, H - FOOTER_H - 12, theme);
   _pdfFooter(doc, title, idx + 2, theme);
 }
 
 // ── generatePDF ───────────────────────────────────────────────────────────────
-async function generatePDF(title, sections = [], opts = {}) {
+async function generatePDF(title, sections = [], references = [], opts = {}) {
   const { style = 'clean', useImages = false } = opts;
   const theme   = getTheme(title);
   const keyword = titleToKeyword(title);
 
-  // Portada usa keyword del título; cada sección usa su keyword específico.
-  // Deduplicación por URL: si la primera imagen ya fue usada, toma la siguiente.
   let coverImgBuf    = null;
   let sectionImgBufs = sections.map(() => null);
   if (useImages) {
@@ -583,22 +877,25 @@ async function generatePDF(title, sections = [], opts = {}) {
       }
     });
 
+    // Página de referencias al final
+    if (Array.isArray(references) && references.length > 0) {
+      _pdfReferencesPage(doc, references, title, theme);
+    }
+
     doc.end();
   });
 }
 
 // ── generatePPTX ──────────────────────────────────────────────────────────────
-async function generatePPTX(title, slides = [], opts = {}) {
+async function generatePPTX(title, slides = [], references = [], opts = {}) {
   const { style = 'clean', useImages = false } = opts;
   const theme   = getTheme(title);
   const keyword = titleToKeyword(title);
 
-  // PPTX: sin imagen en portada ni slide final. Cada slide de contenido
-  // busca con su keyword específico; deduplicación por URL.
   let slideDataUrls = slides.map(() => null);
   if (useImages) {
     const slideKws = slides.map(s => sectionKeyword(title, s.title || ''));
-    const { sectionBufs } = await fetchDocImages(null, slideKws);  // null = sin portada
+    const { sectionBufs } = await fetchDocImages(null, slideKws);
     slideDataUrls = sectionBufs.map(buf => {
       if (!buf) return null;
       try { return 'data:image/jpeg;base64,' + buf.toString('base64'); } catch { return null; }
@@ -624,7 +921,6 @@ async function generatePPTX(title, slides = [], opts = {}) {
   const cover = pptx.addSlide();
 
   if (style === 'technical') {
-    // Fondo claro, panel derecho primario
     cover.background = { color: 'F8F9FA' };
     cover.addShape(pptx.ShapeType.rect, {
       x: W * 0.60, y: 0, w: W * 0.40, h: H,
@@ -653,7 +949,6 @@ async function generatePPTX(title, slides = [], opts = {}) {
       fontSize: 9, color: MGRAY, align: 'left',
     });
   } else if (style === 'clean') {
-    // Fondo con color primario, diseño minimalista
     cover.background = { color: PRI };
     cover.addShape(pptx.ShapeType.rect, {
       x: 0, y: 0, w: W * 0.07, h: H,
@@ -740,24 +1035,23 @@ async function generatePPTX(title, slides = [], opts = {}) {
   slides.forEach((slide, idx) => {
     const s = pptx.addSlide();
     s.background = { color: WHITE };
-    const points = slide.points || [];
+    const points      = slide.points || [];
+    const hasTable    = !!(slide.table?.headers?.length > 0);
+    const hasFlow     = !!(slide.flowchart?.steps?.length > 0);
+    const hasCuriosity = !!slide.curiosity;
+
+    // Reserva espacio si hay curiosity box al fondo
+    const BOTTOM_RESERVE = hasCuriosity ? 1.00 : 0.35;
 
     if (style === 'technical') {
-      // Watermark número grande (faint)
+      // Watermark número (faint)
       s.addText(String(idx + 1).padStart(2, '0'), {
         x: W * 0.55, y: H * 0.05, w: W * 0.43, h: H * 0.80,
         fontSize: 150, bold: true, color: LGRAY,
         align: 'center', valign: 'middle',
       });
-      // Línea primaria top
-      s.addShape(pptx.ShapeType.rect, {
-        x: 0, y: 0, w: W, h: 0.05, fill: { color: PRI }, line: { color: PRI, width: 0 },
-      });
-      // Chip de paso
-      s.addShape(pptx.ShapeType.rect, {
-        x: 0.22, y: 0.14, w: 0.65, h: 0.65,
-        fill: { color: ACC }, line: { color: ACC, width: 0 },
-      });
+      s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.05, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+      s.addShape(pptx.ShapeType.rect, { x: 0.22, y: 0.14, w: 0.65, h: 0.65, fill: { color: ACC }, line: { color: ACC, width: 0 } });
       s.addText(String(idx + 1).padStart(2, '0'), {
         x: 0.22, y: 0.14, w: 0.65, h: 0.65,
         fontSize: 18, bold: true, color: WHITE, align: 'center', valign: 'middle',
@@ -766,28 +1060,26 @@ async function generatePPTX(title, slides = [], opts = {}) {
         x: 1.05, y: 0.17, w: W - 1.30, h: 0.58,
         fontSize: 17, bold: true, color: DARK, align: 'left', valign: 'middle', wrap: true,
       });
-      s.addShape(pptx.ShapeType.rect, {
-        x: 0.22, y: 0.98, w: W - 0.44, h: 0.02,
-        fill: { color: PRI }, line: { color: PRI, width: 0 },
-      });
-      if (points.length > 0) {
-        const availH = H - 1.08 - 0.32;
-        const rowH   = Math.min(availH / points.length, 0.84);
+      s.addShape(pptx.ShapeType.rect, { x: 0.22, y: 0.98, w: W - 0.44, h: 0.02, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+
+      const contentStartY = 1.08;
+      const contentEndY   = H - BOTTOM_RESERVE;
+      const availH        = contentEndY - contentStartY;
+
+      if (hasTable) {
+        _pptxAddTable(s, pptx, slide.table, 0.22, contentStartY, W - 0.44, availH, PRI, ACC, LGRAY, TEXTC, WHITE);
+      } else if (hasFlow) {
+        _pptxAddFlowchart(s, pptx, slide.flowchart, 0.22, contentStartY, W - 0.44, availH, PRI, ACC, DARK, WHITE, TEXTC);
+      } else if (points.length > 0) {
+        const rowH = Math.min(availH / points.length, 0.84);
         points.forEach((p, pi) => {
-          const rowY = 1.08 + pi * rowH;
-          s.addShape(pptx.ShapeType.ellipse, {
-            x: 0.32, y: rowY + rowH * 0.5 - 0.07, w: 0.14, h: 0.14,
-            fill: { color: ACC }, line: { color: ACC, width: 0 },
-          });
-          s.addText(p, {
-            x: 0.58, y: rowY, w: W * 0.60 - 0.70, h: rowH,
-            fontSize: 11, color: TEXTC, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0,
-          });
+          const rowY = contentStartY + pi * rowH;
+          s.addShape(pptx.ShapeType.ellipse, { x: 0.32, y: rowY + rowH * 0.5 - 0.07, w: 0.14, h: 0.14, fill: { color: ACC }, line: { color: ACC, width: 0 } });
+          s.addText(p, { x: 0.58, y: rowY, w: W * 0.60 - 0.70, h: rowH, fontSize: 11, color: TEXTC, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0 });
         });
       }
 
     } else if (style === 'visual') {
-      // Header bar
       s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.72, fill: { color: PRI }, line: { color: PRI, width: 0 } });
       s.addShape(pptx.ShapeType.rect, { x: W - 0.82, y: 0, w: 0.82, h: 0.72, fill: { color: ACC }, line: { color: ACC, width: 0 } });
       s.addText(String(idx + 1).padStart(2, '0'), {
@@ -800,21 +1092,26 @@ async function generatePPTX(title, slides = [], opts = {}) {
       });
 
       const imgDataUrl = slideDataUrls[idx];
-      const txtW = imgDataUrl ? W * 0.54 : W - 0.5;
-      if (imgDataUrl) {
-        const imgX = W * 0.60, imgY = 0.85, imgW = W * 0.37, imgH = H - 0.85 - 0.35;
-        s.addShape(pptx.ShapeType.rect, {
-          x: imgX - 0.08, y: imgY - 0.08, w: imgW + 0.16, h: imgH + 0.16,
-          fill: { color: LGRAY }, line: { color: 'E5E7EB', width: 1 },
-        });
+      const contentStartY = 0.84;
+      const contentEndY   = H - BOTTOM_RESERVE;
+      const availH        = contentEndY - contentStartY;
+      const hasImg        = !!imgDataUrl && !hasTable && !hasFlow;
+      const txtW          = hasImg ? W * 0.54 : W - 0.50;
+
+      if (hasImg) {
+        const imgX = W * 0.60, imgY = 0.85, imgW = W * 0.37, imgH = H - 0.85 - BOTTOM_RESERVE;
+        s.addShape(pptx.ShapeType.rect, { x: imgX - 0.08, y: imgY - 0.08, w: imgW + 0.16, h: imgH + 0.16, fill: { color: LGRAY }, line: { color: 'E5E7EB', width: 1 } });
         s.addImage({ data: imgDataUrl, x: imgX, y: imgY, w: imgW, h: imgH, sizing: { type: 'contain', w: imgW, h: imgH } });
       }
 
-      if (points.length > 0) {
-        const availH = H - 0.72 - 0.35;
-        const rowH   = Math.min(availH / points.length, 0.84);
+      if (hasTable) {
+        _pptxAddTable(s, pptx, slide.table, 0.25, contentStartY, W - 0.50, availH, PRI, ACC, LGRAY, TEXTC, WHITE);
+      } else if (hasFlow) {
+        _pptxAddFlowchart(s, pptx, slide.flowchart, 0.25, contentStartY, txtW, availH, PRI, ACC, DARK, WHITE, TEXTC);
+      } else if (points.length > 0) {
+        const rowH = Math.min(availH / points.length, 0.84);
         points.forEach((p, pi) => {
-          const rowY = 0.84 + pi * rowH;
+          const rowY = contentStartY + pi * rowH;
           if (pi % 2 === 0) s.addShape(pptx.ShapeType.rect, { x: 0.25, y: rowY - 0.04, w: txtW, h: rowH - 0.04, fill: { color: LGRAY }, line: { color: LGRAY, width: 0 } });
           s.addShape(pptx.ShapeType.ellipse, { x: 0.35, y: rowY + rowH * 0.5 - 0.07, w: 0.14, h: 0.14, fill: { color: ACC }, line: { color: ACC, width: 0 } });
           s.addText(p, { x: 0.61, y: rowY, w: txtW - 0.48, h: rowH, fontSize: 11, color: TEXTC, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0 });
@@ -823,7 +1120,7 @@ async function generatePPTX(title, slides = [], opts = {}) {
       s.addText(title, { x: 0.25, y: H - 0.30, w: W - 0.50, h: 0.26, fontSize: 7, color: MGRAY, align: 'left', valign: 'middle' });
 
     } else {
-      // clean: header band sutil + texto full-width
+      // clean
       s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.03, fill: { color: PRI }, line: { color: PRI, width: 0 } });
       s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.03, w: W, h: 0.68, fill: { color: LGRAY }, line: { color: LGRAY, width: 0 } });
       s.addText(String(idx + 1).padStart(2, '0'), {
@@ -836,18 +1133,62 @@ async function generatePPTX(title, slides = [], opts = {}) {
       });
       s.addShape(pptx.ShapeType.rect, { x: 0.22, y: 0.77, w: W - 0.44, h: 0.02, fill: { color: PRI }, line: { color: PRI, width: 0 } });
 
-      if (points.length > 0) {
-        const availH = H - 0.86 - 0.32;
-        const rowH   = Math.min(availH / points.length, 0.84);
+      const contentStartY = 0.86;
+      const contentEndY   = H - BOTTOM_RESERVE;
+      const availH        = contentEndY - contentStartY;
+
+      if (hasTable) {
+        _pptxAddTable(s, pptx, slide.table, 0.22, contentStartY, W - 0.44, availH, PRI, ACC, LGRAY, TEXTC, WHITE);
+      } else if (hasFlow) {
+        _pptxAddFlowchart(s, pptx, slide.flowchart, 0.22, contentStartY, W - 0.44, availH, PRI, ACC, DARK, WHITE, TEXTC);
+      } else if (points.length > 0) {
+        const rowH = Math.min(availH / points.length, 0.84);
         points.forEach((p, pi) => {
-          const rowY = 0.86 + pi * rowH;
+          const rowY = contentStartY + pi * rowH;
           s.addShape(pptx.ShapeType.ellipse, { x: 0.32, y: rowY + rowH * 0.5 - 0.06, w: 0.12, h: 0.12, fill: { color: ACC }, line: { color: ACC, width: 0 } });
           s.addText(p, { x: 0.56, y: rowY, w: W - 0.78, h: rowH, fontSize: 11, color: TEXTC, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0 });
         });
       }
       s.addText(title, { x: 0.25, y: H - 0.30, w: W - 0.50, h: 0.26, fontSize: 7, color: MGRAY, align: 'left', valign: 'middle' });
     }
+
+    // Curiosity box al fondo (todos los estilos)
+    if (hasCuriosity) {
+      const boxY = H - 0.95;
+      s.addShape(pptx.ShapeType.rect, {
+        x: 0.22, y: boxY, w: W - 0.44, h: 0.78,
+        fill: { color: ACC, transparency: 88 }, line: { color: ACC, width: 1.2 },
+      });
+      s.addShape(pptx.ShapeType.rect, {
+        x: 0.22, y: boxY, w: 0.06, h: 0.78,
+        fill: { color: ACC }, line: { color: ACC, width: 0 },
+      });
+      s.addText(`💡 ${slide.curiosity}`, {
+        x: 0.34, y: boxY + 0.06, w: W - 0.62, h: 0.66,
+        fontSize: 9, color: TEXTC, align: 'left', valign: 'middle', wrap: true,
+      });
+    }
   });
+
+  // ── SLIDE REFERENCIAS ─────────────────────────────────────────────────────
+  if (Array.isArray(references) && references.length > 0) {
+    const refSlide = pptx.addSlide();
+    refSlide.background = { color: WHITE };
+    refSlide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.05, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+    refSlide.addShape(pptx.ShapeType.rect, { x: 0, y: 0.05, w: W, h: 0.70, fill: { color: LGRAY }, line: { color: LGRAY, width: 0 } });
+    refSlide.addText('Referencias', { x: 0.25, y: 0.10, w: 4, h: 0.55, fontSize: 20, bold: true, color: DARK });
+    refSlide.addShape(pptx.ShapeType.rect, { x: 0.25, y: 0.78, w: 0.70, h: 0.03, fill: { color: ACC }, line: { color: ACC, width: 0 } });
+
+    references.slice(0, 6).forEach((ref, i) => {
+      const refY = 0.92 + i * 0.72;
+      if (refY + 0.65 > H) return;
+      const apa = `${ref.author || ''} (${ref.year || 's.f.'}). ${ref.title || ''}. ${ref.publisher || ''}`;
+      refSlide.addText([
+        { text: `${i + 1}. `, options: { bold: true, color: ACC } },
+        { text: apa + (ref.url ? `\n${ref.url}` : ''), options: { color: TEXTC } },
+      ], { x: 0.25, y: refY, w: W - 0.50, h: 0.65, fontSize: 9.5, wrap: true });
+    });
+  }
 
   // ── SLIDE FINAL ───────────────────────────────────────────────────────────
   const end = pptx.addSlide();
@@ -884,6 +1225,81 @@ async function generatePPTX(title, slides = [], opts = {}) {
 
   const data = await pptx.write({ outputType: 'nodebuffer' });
   return Buffer.from(data);
+}
+
+// ── PPTX helper: tabla nativa ─────────────────────────────────────────────────
+function _pptxAddTable(s, pptx, table, x, y, w, availH, PRI, ACC, LGRAY, TEXTC, WHITE) {
+  const { headers = [], rows = [] } = table;
+  if (!headers.length) return;
+
+  const colW = w / headers.length;
+  const rowH = Math.min(0.40, (availH - 0.15) / (rows.length + 1));
+
+  const tableData = [
+    headers.map(h => ({
+      text: String(h),
+      options: { bold: true, color: WHITE, fill: { color: PRI }, fontSize: 10, align: 'center', valign: 'middle' },
+    })),
+    ...rows.map((row, ri) => (row || []).map(cell => ({
+      text: String(cell ?? ''),
+      options: {
+        color: TEXTC, fontSize: 9.5, align: 'left', valign: 'middle',
+        fill: { color: ri % 2 === 0 ? WHITE : LGRAY },
+      },
+    }))),
+  ];
+
+  s.addTable(tableData, {
+    x, y,
+    w,
+    colW: Array(headers.length).fill(colW),
+    rowH,
+    border: { type: 'solid', color: PRI, pt: 0.5, transparency: 70 },
+  });
+}
+
+// ── PPTX helper: flowchart de shapes ─────────────────────────────────────────
+function _pptxAddFlowchart(s, pptx, flowchart, x, y, w, availH, PRI, ACC, DARK, WHITE, TEXTC) {
+  const { steps = [], decision_idx = -1 } = flowchart;
+  if (!steps.length) return;
+
+  const boxW   = Math.min(3.2, w * 0.70);
+  const boxH   = 0.50;
+  const gapH   = 0.32;
+  const totalH = steps.length * (boxH + gapH);
+  const scale  = totalH > availH ? availH / totalH : 1;
+  const centerX = x + w / 2;
+
+  steps.forEach((step, si) => {
+    const bx  = centerX - boxW / 2;
+    const by  = y + si * (boxH + gapH) * scale;
+    const isDecision = si === decision_idx;
+    const isEndpoint = si === 0 || si === steps.length - 1;
+
+    const shapeType = isDecision ? pptx.ShapeType.diamond : pptx.ShapeType.roundRect;
+    const fillColor = isEndpoint ? PRI : (isDecision ? ACC : WHITE);
+    const textColor = isEndpoint ? WHITE : (isDecision ? WHITE : DARK);
+
+    s.addShape(shapeType, {
+      x: bx, y: by, w: boxW, h: boxH * scale,
+      fill: { color: fillColor },
+      line: { color: PRI, width: 1.2 },
+    });
+    s.addText(String(step), {
+      x: bx, y: by, w: boxW, h: boxH * scale,
+      fontSize: 9, color: textColor, align: 'center', valign: 'middle', wrap: true,
+    });
+
+    // Flecha
+    if (si < steps.length - 1) {
+      const arrowY = by + boxH * scale;
+      s.addShape(pptx.ShapeType.line, {
+        x: centerX - 0.001, y: arrowY,
+        w: 0.001, h: gapH * scale,
+        line: { color: PRI, width: 1.2, endArrowType: 'arrow' },
+      });
+    }
+  });
 }
 
 // ── Detección de tipo de documento con IA ────────────────────────────────────

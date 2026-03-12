@@ -794,8 +794,8 @@ function setupRouter(sock, groqService) {
             // Pedir estructura JSON a Groq — incluye style y use_images
             const styleGuide = `Elige el estilo según el tema:\n- "visual": entretenimiento, gaming, videojuegos, deportes, viajes, música, arte, cultura → use_images: true\n- "technical": tutoriales, guías paso a paso, instalaciones, programación, IT, configuración → use_images: false\n- "clean": negocios, reportes, análisis, académico, historia, ciencia → use_images: false`;
             const structurePrompt = docType === 'pptx'
-              ? `El usuario pidió: "${text}"\n\n${styleGuide}\n\nGenera una presentación PowerPoint completa con al menos 6 slides. Responde SOLO con JSON válido:\n{"title":"...","style":"visual|technical|clean","use_images":true,"slides":[{"title":"...","points":["punto 1","punto 2","punto 3","punto 4"]}]}`
-              : `El usuario pidió: "${text}"\n\n${styleGuide}\n\nGenera un documento PDF completo con al menos 5 secciones bien desarrolladas. Responde SOLO con JSON válido:\n{"title":"...","style":"technical","use_images":false,"sections":[{"heading":"...","content":"párrafo extenso con información relevante y detallada..."}]}`;
+              ? `El usuario pidió: "${text}"\n\n${styleGuide}\n\nGenera una presentación PowerPoint completa y profesional con 6-8 slides. Responde SOLO con JSON válido:\n{"title":"...","style":"visual|technical|clean","use_images":true,"slides":[{"title":"...","points":["Punto 1 completo y descriptivo con datos concretos","Punto 2 desarrollado","Punto 3 con contexto","Punto 4 con impacto"],"table":{"headers":["Col1","Col2","Col3"],"rows":[["dato","dato","dato"],["dato","dato","dato"]]},"flowchart":{"steps":["Inicio","Paso 1: descripción","¿Condición?","Resultado A","Fin"],"decision_idx":2},"curiosity":"¿Sabías que...? dato fascinante y poco conocido relacionado con el tema"}],"references":[{"author":"Apellido, N.","year":2023,"title":"Título del trabajo","publisher":"Editorial o Revista","url":"https://ejemplo.com"}]}\n\nREGLAS OBLIGATORIAS:\n- Cada slide tiene 4-6 points sustanciosos con oraciones completas\n- Añade "table" en exactamente 1 slide con datos comparativos reales\n- Añade "flowchart" en exactamente 1 slide con un proceso o algoritmo (4-6 pasos, NO el mismo slide que tiene table)\n- Añade "curiosity" en 2-3 slides con datos sorprendentes y verificables\n- Cuando un slide tiene "table", omite "points" o déjalo vacío []\n- Incluye 3-5 referencias académicas o de fuentes confiables en "references"\n- NO pongas table+flowchart+curiosity en el mismo slide ni en todos los slides`
+              : `El usuario pidió: "${text}"\n\n${styleGuide}\n\nGenera un documento PDF completo y profesional con 5-7 secciones ricas. Responde SOLO con JSON válido:\n{"title":"...","style":"technical","use_images":false,"sections":[{"heading":"...","content":"Texto con jerarquía tipográfica. Párrafo extenso de mínimo 120 palabras.\\n\\n## Subtítulo de nivel 2\\nDesarrollo del subtema con datos concretos, cifras y ejemplos reales.\\n\\n### Sub-subtítulo nivel 3\\nDetalle adicional.\\n\\n1. Primer punto numerado con explicación completa\\n2. Segundo punto con datos\\n3. Tercer punto\\n\\n- Bullet principal con información relevante\\n  - Sub-bullet anidado con detalle específico\\n  - Otro sub-bullet\\n\\n**Concepto clave** para destacar en negrita con su explicación.","table":{"headers":["Columna 1","Columna 2","Columna 3"],"rows":[["dato a","dato b","dato c"],["dato d","dato e","dato f"],["dato g","dato h","dato i"]]},"flowchart":{"steps":["Inicio","Paso 1: descripción detallada","Paso 2: acción","¿Condición o decisión?","Resultado A","Fin"],"decision_idx":3},"curiosity":"¿Sabías que...? dato curioso, fascinante y poco conocido relacionado con el tema de la sección"}],"references":[{"author":"Apellido, N.","year":2023,"title":"Título completo del trabajo","publisher":"Editorial o nombre de la revista","url":"https://ejemplo.com/articulo"}]}\n\nREGLAS OBLIGATORIAS:\n- "content" SIEMPRE usa ## y ### para subtítulos, listas numeradas para pasos, bullets con sub-bullets anidados "  -", **negrita** para términos clave — mínimo 120 palabras por sección\n- Añade "table" en 1-2 secciones donde haya datos comparativos, estadísticas o características\n- Añade "flowchart" en 1 sección donde se describe un proceso, ciclo o algoritmo (NO el mismo que tiene table)\n- Añade "curiosity" en 2-3 secciones con datos sorprendentes, cifras impactantes o hechos poco conocidos\n- Incluye 3-5 referencias en "references" con formato APA completo\n- NO pongas table+flowchart+curiosity en todas las secciones — distribúyelos estratégicamente`;
 
             const structRes = await groqService.client.chat.completions.create({
               model: 'llama-3.3-70b-versatile',
@@ -803,7 +803,7 @@ function setupRouter(sock, groqService) {
                 { role: 'system', content: 'Eres un experto generando estructuras JSON para documentos profesionales. El contenido debe ser completo, detallado y bien redactado. Responde SOLO con el JSON, sin texto adicional ni bloques de código.' },
                 { role: 'user', content: structurePrompt },
               ],
-              max_tokens: 4000,
+              max_tokens: 6000,
               temperature: 0.4,
             });
 
@@ -824,11 +824,11 @@ function setupRouter(sock, groqService) {
 
             const docOpts = { style: structure.style || 'clean', useImages: !!structure.use_images };
             if (docType === 'pptx') {
-              fileBuffer = await generatePPTX(structure.title, structure.slides || [], docOpts);
+              fileBuffer = await generatePPTX(structure.title, structure.slides || [], structure.references || [], docOpts);
               fileName   = `${(structure.title || 'presentacion').substring(0, 40).replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s]/g, '').trim()}.pptx`;
               mimeType   = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
             } else {
-              fileBuffer = await generatePDF(structure.title, structure.sections || [], docOpts);
+              fileBuffer = await generatePDF(structure.title, structure.sections || [], structure.references || [], docOpts);
               fileName   = `${(structure.title || 'documento').substring(0, 40).replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s]/g, '').trim()}.pdf`;
               mimeType   = 'application/pdf';
             }
