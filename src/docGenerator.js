@@ -79,7 +79,7 @@ function _scoreCandidate(candidate, keyword) {
  * Trae hasta `count` candidatos de DDG con metadata completa (título, url, imagen).
  * Filtra dominios bloqueados y mínimo ancho 600px.
  */
-async function _getDDGCandidates(keyword, count) {
+async function _getDDGCandidates(keyword, count, offset = 0) {
   const q = keyword;
   const pageRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(q)}&ia=images`, {
     headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
@@ -90,7 +90,7 @@ async function _getDDGCandidates(keyword, count) {
   if (!vqd) return [];
 
   const apiUrl = 'https://duckduckgo.com/i.js?' + new URLSearchParams({
-    q, o: 'json', p: '1', s: '0', u: 'bing', f: ',,,', l: 'en-us', vqd,
+    q, o: 'json', p: '1', s: String(offset), u: 'bing', f: ',,,', l: 'en-us', vqd,
   });
   const apiRes = await fetch(apiUrl, {
     headers: { 'User-Agent': UA, 'Referer': 'https://duckduckgo.com/', 'Accept': 'application/json' },
@@ -166,31 +166,43 @@ async function fetchDocImages(coverKeyword, sectionKeywords) {
     } catch {}
   }
 
-  // B. DDG: candidatos con metadata completa (título, url, imagen) para scoring
+  // B. DDG: candidatos con metadata completa para scoring + deduplicación
   const candidateLists = await Promise.allSettled(
-    allKeywords.map(kw => _getDDGCandidates(kw, 15))
+    allKeywords.map(kw => _getDDGCandidates(kw, 18))
   );
 
   const usedUrls = new Set();
-  const selectedUrls = candidateLists.map((res, ki) => {
-    const keyword    = allKeywords[ki];
-    const candidates = res.status === 'fulfilled' ? (res.value || []) : [];
 
-    // Puntuar por coincidencia de keywords en título/URL y ordenar de mayor a menor
+  // Selección por keyword: en serie para que la deduplicación sea consistente
+  const selectedUrls = [];
+  for (let ki = 0; ki < allKeywords.length; ki++) {
+    const keyword    = allKeywords[ki];
+    const candidates = candidateLists[ki]?.status === 'fulfilled' ? (candidateLists[ki].value || []) : [];
+
     const scored = candidates
       .map(c => ({ ...c, score: _scoreCandidate(c, keyword) }))
       .sort((a, b) => b.score - a.score);
 
-    // Tomar el primero relevante (score > 0) no duplicado
+    // 1. Relevante y no duplicado
     const pick = scored.find(c => c.score > 0 && !usedUrls.has(c.image));
-    if (pick) { usedUrls.add(pick.image); return pick.image; }
+    if (pick) { usedUrls.add(pick.image); selectedUrls.push(pick.image); continue; }
 
-    // Fallback: primer no duplicado aunque tenga score 0
+    // 2. Pool agotado: pedir segunda página (offset 20) con mismo keyword
+    try {
+      const more = await _getDDGCandidates(keyword, 18, 20);
+      const morePick = more
+        .map(c => ({ ...c, score: _scoreCandidate(c, keyword) }))
+        .sort((a, b) => b.score - a.score)
+        .find(c => !usedUrls.has(c.image));
+      if (morePick) { usedUrls.add(morePick.image); selectedUrls.push(morePick.image); continue; }
+    } catch {}
+
+    // 3. Último fallback: cualquier no duplicado del primer batch (score 0 ok)
     const fallback = scored.find(c => !usedUrls.has(c.image));
-    if (fallback) { usedUrls.add(fallback.image); return fallback.image; }
+    if (fallback) { usedUrls.add(fallback.image); selectedUrls.push(fallback.image); continue; }
 
-    return null;
-  });
+    selectedUrls.push(null);
+  }
 
   // Descargar las seleccionadas en paralelo
   const bufs = await Promise.allSettled(
