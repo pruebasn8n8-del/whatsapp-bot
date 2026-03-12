@@ -12,6 +12,7 @@ const {
   handleOnboardingStep,
   loadPersonalityIfNeeded,
   updatePersonality,
+  resetOnboarding,
 } = require('./onboarding');
 const {
   isBlocked, blockContact, unblockContact, getBlockedContacts,
@@ -664,6 +665,12 @@ function setupRouter(sock, groqService) {
             await sock.sendMessage(jid, { text: PREFIX + lines.join('\n') });
             continue;
           }
+        }
+
+        // /configurar - reiniciar onboarding completo (nombre, uso, tono)
+        if (/^\/configurar$/i.test(text)) {
+          await resetOnboarding(sock, jid, pushName, groqService);
+          continue;
         }
 
         // /miperfil - cambiar personalidad (todos los usuarios)

@@ -193,6 +193,19 @@ async function loadPersonalityIfNeeded(jid, groqService) {
 }
 
 /**
+ * Reinicia el onboarding del usuario: borra estado y arranca el flujo desde cero.
+ */
+async function resetOnboarding(sock, jid, pushName, groqService) {
+  _sessions.delete(jid);
+  await clearOnboardingSession(jid).catch(() => {});
+  await upsertContact(jid, { onboarding_done: false, onboarding_step: null, onboarding_data: null, personality: null, name: null });
+  groqService.clearHistory(jid);
+  groqService.customPrompts.delete(jid);
+  groqService.userContexts.delete(jid);
+  await startOnboarding(sock, jid, pushName);
+}
+
+/**
  * Actualiza la personalidad via /miperfil.
  */
 async function updatePersonality(sock, jid, newPersonality, groqService) {
@@ -210,4 +223,5 @@ module.exports = {
   handleOnboardingStep,
   loadPersonalityIfNeeded,
   updatePersonality,
+  resetOnboarding,
 };
