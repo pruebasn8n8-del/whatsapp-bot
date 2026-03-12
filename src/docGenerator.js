@@ -430,20 +430,21 @@ async function generatePDF(title, sections = []) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PPTX — diseño minimalista moderno
+// PPTX — diseño moderno con imágenes en columna lateral de slides de contenido
 // ─────────────────────────────────────────────────────────────────────────────
 async function generatePPTX(title, slides = []) {
   const theme   = getTheme(title);
   const keyword = titleToKeyword(title);
-  const imgBuf  = await fetchCoverImage(keyword);
 
-  // Convertir imagen a base64 data URL para pptxgenjs
-  let coverDataUrl = null;
-  if (imgBuf) {
-    try {
-      coverDataUrl = 'data:image/jpeg;base64,' + imgBuf.toString('base64');
-    } catch { coverDataUrl = null; }
-  }
+  // Imágenes por slide (no para portada/final): una por slide, en paralelo
+  const slideImgResults = await Promise.allSettled(
+    slides.map(s => fetchCoverImage(s.title || keyword))
+  );
+  const slideDataUrls = slideImgResults.map(r => {
+    if (r.status !== 'fulfilled' || !r.value) return null;
+    try { return 'data:image/jpeg;base64,' + r.value.toString('base64'); }
+    catch { return null; }
+  });
 
   const pptx = new PptxGenJS();
   pptx.layout  = 'LAYOUT_16x9';
@@ -455,96 +456,76 @@ async function generatePPTX(title, slides = []) {
   const H  = 5.625;
 
   // Colores sin # para pptxgenjs
-  const PRI  = hex(theme.primary);
-  const ACC  = hex(theme.accent);
-  const DARK = hex(theme.dark);
-  const BG   = hex(theme.bg);
+  const PRI   = hex(theme.primary);
+  const ACC   = hex(theme.accent);
+  const DARK  = hex(theme.dark);
   const WHITE = 'FFFFFF';
   const LGRAY = 'F3F4F6';
   const MGRAY = '9CA3AF';
   const TEXTC = '1F2937';
 
-  // ── PORTADA ───────────────────────────────────────────────────────────────
+  // ── PORTADA — solo shapes, sin imagen (limpio y sin distorsión) ───────────
   const cover = pptx.addSlide();
+  cover.background = { color: DARK };
 
-  if (coverDataUrl) {
-    // Imagen full-bleed
-    cover.addImage({
-      data: coverDataUrl,
-      x: 0, y: 0, w: W, h: H,
-      sizing: { type: 'cover', w: W, h: H },
-    });
-    // Overlay oscuro semi-transparente (transparency: 0–100, donde 100=invisible)
-    cover.addShape(pptx.ShapeType.rect, {
-      x: 0, y: 0, w: W, h: H,
-      fill: { color: DARK, transparency: 45 },
-      line: { color: DARK, width: 0 },
-    });
-  } else {
-    // Fondo sólido oscuro sin imagen
-    cover.background = { color: DARK };
-
-    // Círculo decorativo sutil
-    cover.addShape(pptx.ShapeType.ellipse, {
-      x: W * 0.68, y: -0.8, w: 3.5, h: 3.5,
-      fill: { color: PRI, transparency: 88 },
-      line: { color: PRI, width: 0 },
-    });
-    cover.addShape(pptx.ShapeType.ellipse, {
-      x: W * 0.78, y: -0.2, w: 2.2, h: 2.2,
-      fill: { color: ACC, transparency: 85 },
-      line: { color: ACC, width: 0 },
-    });
-  }
-
-  // Franja vertical izquierda (acento) — 10% del ancho
+  // Panel derecho decorativo en color primario
   cover.addShape(pptx.ShapeType.rect, {
-    x: 0, y: 0, w: W * 0.1, h: H,
+    x: W * 0.62, y: 0, w: W * 0.38, h: H,
+    fill: { color: PRI, transparency: 20 },
+    line: { color: PRI, width: 0 },
+  });
+
+  // Círculos decorativos en el panel derecho
+  cover.addShape(pptx.ShapeType.ellipse, {
+    x: W * 0.72, y: -0.6, w: 2.8, h: 2.8,
+    fill: { color: ACC, transparency: 75 },
+    line: { color: ACC, width: 0 },
+  });
+  cover.addShape(pptx.ShapeType.ellipse, {
+    x: W * 0.80, y: H * 0.55, w: 2.0, h: 2.0,
+    fill: { color: WHITE, transparency: 90 },
+    line: { color: WHITE, width: 0 },
+  });
+
+  // Franja vertical izquierda (acento)
+  cover.addShape(pptx.ShapeType.rect, {
+    x: 0, y: 0, w: W * 0.08, h: H,
     fill: { color: ACC },
     line: { color: ACC, width: 0 },
   });
 
-  // Línea fina horizontal sobre el título
+  // Línea fina horizontal
   cover.addShape(pptx.ShapeType.rect, {
-    x: W * 0.14, y: H * 0.36,
-    w: 0.5, h: 0.04,
+    x: W * 0.12, y: H * 0.37, w: 0.45, h: 0.04,
     fill: { color: ACC },
     line: { color: ACC, width: 0 },
   });
 
-  // Etiqueta "DOCUMENTO" sobre el título
   cover.addText('GENERADO POR CORTANA', {
-    x: W * 0.13, y: H * 0.24, w: W * 0.75, h: 0.28,
-    fontSize: 7.5, color: WHITE, bold: false,
-    charSpacing: 2.5, align: 'left', valign: 'middle',
-    transparency: 45,
+    x: W * 0.11, y: H * 0.22, w: W * 0.50, h: 0.28,
+    fontSize: 7.5, color: WHITE, charSpacing: 2.5,
+    align: 'left', valign: 'middle', transparency: 45,
   });
 
-  // Título grande centrado (desplazado a la derecha de la franja)
   cover.addText(title, {
-    x: W * 0.13, y: H * 0.30, w: W * 0.80, h: H * 0.45,
-    fontSize: 34, bold: true, color: WHITE,
+    x: W * 0.11, y: H * 0.28, w: W * 0.52, h: H * 0.48,
+    fontSize: 32, bold: true, color: WHITE,
     align: 'left', valign: 'middle', wrap: true,
-    paraSpaceAfter: 0,
   });
 
-  // Fecha + subtítulo
   cover.addText(`${fmtDate()}  ·  Cortana @andrewhypervenom`, {
-    x: W * 0.13, y: H * 0.76, w: W * 0.76, h: 0.35,
-    fontSize: 9.5, color: WHITE, align: 'left',
-    transparency: 38,
+    x: W * 0.11, y: H * 0.78, w: W * 0.50, h: 0.32,
+    fontSize: 9, color: WHITE, align: 'left', transparency: 40,
   });
 
-  // Contador de secciones en el acento
   cover.addText(`${slides.length}`, {
-    x: 0, y: H * 0.42, w: W * 0.1, h: 0.4,
+    x: 0, y: H * 0.40, w: W * 0.08, h: 0.40,
     fontSize: 18, bold: true, color: WHITE,
     align: 'center', valign: 'middle',
   });
-  cover.addText('secciones', {
-    x: 0, y: H * 0.56, w: W * 0.1, h: 0.28,
-    fontSize: 7, color: WHITE, align: 'center',
-    transparency: 25,
+  cover.addText('slides', {
+    x: 0, y: H * 0.55, w: W * 0.08, h: 0.26,
+    fontSize: 7, color: WHITE, align: 'center', transparency: 25,
   });
 
   // ── SLIDES DE CONTENIDO ───────────────────────────────────────────────────
@@ -552,46 +533,73 @@ async function generatePPTX(title, slides = []) {
     const s = pptx.addSlide();
     s.background = { color: WHITE };
 
-    // Barra superior de color primario (0.75 pulgadas)
+    const imgDataUrl = slideDataUrls[idx] || null;
+    // Dos columnas si hay imagen; texto completo si no
+    const txtW = imgDataUrl ? W * 0.54 : W - 0.5;
+    const txtX = 0.25;
+
+    // ── Barra superior ──
     s.addShape(pptx.ShapeType.rect, {
-      x: 0, y: 0, w: W, h: 0.75,
+      x: 0, y: 0, w: W, h: 0.72,
       fill: { color: PRI },
       line: { color: PRI, width: 0 },
     });
 
-    // Chip del número de sección — esquina superior derecha dentro de la barra
+    // Chip de número
     s.addShape(pptx.ShapeType.rect, {
-      x: W - 0.85, y: 0, w: 0.85, h: 0.75,
+      x: W - 0.82, y: 0, w: 0.82, h: 0.72,
       fill: { color: ACC },
       line: { color: ACC, width: 0 },
     });
     s.addText(String(idx + 1).padStart(2, '0'), {
-      x: W - 0.85, y: 0, w: 0.85, h: 0.75,
-      fontSize: 18, bold: true, color: WHITE,
+      x: W - 0.82, y: 0, w: 0.82, h: 0.72,
+      fontSize: 17, bold: true, color: WHITE,
       align: 'center', valign: 'middle',
     });
 
-    // Título de la slide dentro de la barra
+    // Título en la barra
     s.addText(slide.title || '', {
-      x: 0.28, y: 0, w: W - 1.25, h: 0.75,
-      fontSize: 17, bold: true, color: WHITE,
+      x: 0.25, y: 0, w: W - 1.20, h: 0.72,
+      fontSize: 16, bold: true, color: WHITE,
       align: 'left', valign: 'middle', wrap: true,
     });
 
-    // Puntos con dot decorativo en acento
+    // ── Imagen lateral derecha (si existe) ──
+    if (imgDataUrl) {
+      const imgX  = W * 0.60;
+      const imgY  = 0.85;
+      const imgW  = W * 0.37;
+      const imgH  = H - 0.85 - 0.35;
+
+      // Card de fondo para la imagen
+      s.addShape(pptx.ShapeType.rect, {
+        x: imgX - 0.08, y: imgY - 0.08,
+        w: imgW + 0.16, h: imgH + 0.16,
+        fill: { color: LGRAY },
+        line: { color: 'E5E7EB', width: 1 },
+      });
+
+      s.addImage({
+        data: imgDataUrl,
+        x: imgX, y: imgY,
+        w: imgW, h: imgH,
+        sizing: { type: 'contain', w: imgW, h: imgH },
+      });
+    }
+
+    // ── Puntos de texto ──
     const points = slide.points || [];
     if (points.length > 0) {
-      const availH  = H - 0.75 - 0.35;  // barra + footer
-      const rowH    = Math.min(availH / points.length, 0.82);
-      const startY  = 0.88;
+      const availH = H - 0.72 - 0.35;
+      const rowH   = Math.min(availH / points.length, 0.84);
+      const startY = 0.84;
 
       points.forEach((p, pi) => {
         const rowY = startY + pi * rowH;
 
-        // Fondo alterno muy sutil
         if (pi % 2 === 0) {
           s.addShape(pptx.ShapeType.rect, {
-            x: 0.22, y: rowY - 0.04, w: W - 0.36, h: rowH - 0.04,
+            x: txtX, y: rowY - 0.04, w: txtW, h: rowH - 0.04,
             fill: { color: LGRAY },
             line: { color: LGRAY, width: 0 },
           });
@@ -599,77 +607,69 @@ async function generatePPTX(title, slides = []) {
 
         // Dot acento
         s.addShape(pptx.ShapeType.ellipse, {
-          x: 0.32, y: rowY + rowH * 0.5 - 0.07,
+          x: txtX + 0.10, y: rowY + rowH * 0.5 - 0.07,
           w: 0.14, h: 0.14,
           fill: { color: ACC },
           line: { color: ACC, width: 0 },
         });
 
-        // Texto del punto
         s.addText(p, {
-          x: 0.58, y: rowY, w: W - 0.80, h: rowH,
-          fontSize: 11.5, color: TEXTC,
+          x: txtX + 0.36, y: rowY, w: txtW - 0.48, h: rowH,
+          fontSize: 11, color: TEXTC,
           align: 'left', valign: 'middle', wrap: true,
           paraSpaceAfter: 0,
         });
       });
     }
 
-    // Footer: título del documento en gris
+    // Footer
     s.addText(title, {
-      x: 0.28, y: H - 0.3, w: W - 0.56, h: 0.28,
-      fontSize: 7.5, color: MGRAY, align: 'left', valign: 'middle',
+      x: 0.25, y: H - 0.30, w: W - 0.50, h: 0.26,
+      fontSize: 7, color: MGRAY, align: 'left', valign: 'middle',
     });
   });
 
-  // ── SLIDE FINAL "Thank you" ───────────────────────────────────────────────
+  // ── SLIDE FINAL — solo shapes, igual que portada ──────────────────────────
   const end = pptx.addSlide();
+  end.background = { color: DARK };
 
-  if (coverDataUrl) {
-    end.addImage({
-      data: coverDataUrl,
-      x: 0, y: 0, w: W, h: H,
-      sizing: { type: 'cover', w: W, h: H },
-    });
-    end.addShape(pptx.ShapeType.rect, {
-      x: 0, y: 0, w: W, h: H,
-      fill: { color: DARK, transparency: 45 },
-      line: { color: DARK, width: 0 },
-    });
-  } else {
-    end.background = { color: DARK };
-    end.addShape(pptx.ShapeType.ellipse, {
-      x: -0.5, y: H * 0.55, w: 3, h: 3,
-      fill: { color: PRI, transparency: 88 },
-      line: { color: PRI, width: 0 },
-    });
-  }
-
-  // Franja izquierda igual que portada
   end.addShape(pptx.ShapeType.rect, {
-    x: 0, y: 0, w: W * 0.1, h: H,
+    x: W * 0.62, y: 0, w: W * 0.38, h: H,
+    fill: { color: PRI, transparency: 20 },
+    line: { color: PRI, width: 0 },
+  });
+  end.addShape(pptx.ShapeType.ellipse, {
+    x: W * 0.72, y: -0.6, w: 2.8, h: 2.8,
+    fill: { color: ACC, transparency: 75 },
+    line: { color: ACC, width: 0 },
+  });
+  end.addShape(pptx.ShapeType.ellipse, {
+    x: -0.5, y: H * 0.55, w: 2.5, h: 2.5,
+    fill: { color: PRI, transparency: 85 },
+    line: { color: PRI, width: 0 },
+  });
+
+  end.addShape(pptx.ShapeType.rect, {
+    x: 0, y: 0, w: W * 0.08, h: H,
     fill: { color: ACC },
     line: { color: ACC, width: 0 },
   });
 
-  // "Gracias" grande
   end.addText('Gracias', {
-    x: W * 0.13, y: H * 0.18, w: W * 0.78, h: H * 0.46,
-    fontSize: 54, bold: true, color: WHITE,
+    x: W * 0.11, y: H * 0.18, w: W * 0.50, h: H * 0.46,
+    fontSize: 52, bold: true, color: WHITE,
     align: 'left', valign: 'middle',
   });
 
-  // Línea decorativa fina
   end.addShape(pptx.ShapeType.rect, {
-    x: W * 0.13, y: H * 0.70, w: 0.5, h: 0.04,
+    x: W * 0.11, y: H * 0.70, w: 0.45, h: 0.04,
     fill: { color: ACC },
     line: { color: ACC, width: 0 },
   });
 
   end.addText('Presentación generada por Cortana · @andrewhypervenom', {
-    x: W * 0.13, y: H * 0.74, w: W * 0.75, h: 0.35,
-    fontSize: 10, color: WHITE,
-    align: 'left', transparency: 38,
+    x: W * 0.11, y: H * 0.74, w: W * 0.50, h: 0.32,
+    fontSize: 9.5, color: WHITE, align: 'left', transparency: 40,
   });
 
   const data = await pptx.write({ outputType: 'nodebuffer' });
