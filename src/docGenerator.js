@@ -314,94 +314,78 @@ async function generatePDF(title, sections = []) {
       });
     }
 
-    // ── PÁGINAS DE CONTENIDO — diseño website/app ────────────────────────────
+    // ── PÁGINAS DE CONTENIDO — layout revista: cabecera + 2 columnas ─────────
     for (const [idx, sec] of sections.entries()) {
       doc.addPage({ margin: 0 });
 
-      const pW   = doc.page.width;
-      const pH   = doc.page.height;
-      const pCW  = pW - ML - MR;
-      const IMG_H    = Math.round(pH * 0.38);   // hero image: 38% de la página
+      const pW      = doc.page.width;
+      const pH      = doc.page.height;
       const FOOTER_H = 34;
-      const CARD_Y   = IMG_H + 14;
-      const CARD_H   = pH - CARD_Y - FOOTER_H - 10;
+      const HEADER_H = 58;
       const secImg   = sectionImgsBuf[idx] || null;
 
-      // ── Fondo de página con color del tema
-      doc.fillOpacity(1);
-      doc.rect(0, 0, pW, pH).fill(theme.bg);
+      // Fondo blanco
+      doc.fillOpacity(1).rect(0, 0, pW, pH).fill('#ffffff');
 
-      // ── Hero image / bloque de sección (top 38%)
+      // ── Cabecera de color primario ──
+      doc.rect(0, 0, pW, HEADER_H).fill(theme.primary);
+
+      // Chip de número (acento, esquina derecha)
+      doc.rect(pW - 50, 0, 50, HEADER_H).fill(theme.accent);
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(14)
+         .text(String(idx + 1).padStart(2, '0'), pW - 50, HEADER_H / 2 - 8, { width: 50, align: 'center' });
+
+      // Título de sección en la cabecera
+      if (sec.heading) {
+        doc.fillColor('#ffffff').fillOpacity(1)
+           .font('Helvetica-Bold').fontSize(15)
+           .text(sec.heading, ML, HEADER_H / 2 - 10, { width: pW - ML - 60, lineGap: 2 });
+      }
+
+      // ── Área de contenido ──
+      // Columnas: texto a la izquierda, imagen a la derecha (si existe)
+      const IMG_BOX_W = secImg ? 180 : 0;   // ancho reservado para imagen
+      const IMG_BOX_H = 170;
+      const IMG_PAD   = 14;
+      const CONTENT_X = ML;
+      const CONTENT_Y = HEADER_H + 18;
+      const CONTENT_W = secImg
+        ? pW - ML - MR - IMG_BOX_W - IMG_PAD
+        : pW - ML - MR;
+      const MAX_Y     = pH - FOOTER_H - 14;
+
+      // Card de imagen (columna derecha) — antes del texto para que quede detrás
       if (secImg) {
+        const imgX = pW - MR - IMG_BOX_W;
+        const imgY = CONTENT_Y;
+
+        // Fondo gris claro del card
+        doc.save().fillOpacity(1)
+           .rect(imgX - 6, imgY - 6, IMG_BOX_W + 12, IMG_BOX_H + 12)
+           .fill('#F3F4F6');
+        doc.restore();
+
+        // Borde sutil
+        doc.save()
+           .rect(imgX - 6, imgY - 6, IMG_BOX_W + 12, IMG_BOX_H + 12)
+           .stroke('#E5E7EB');
+        doc.restore();
+
+        // Imagen contenida (cover dentro del recuadro)
         try {
           doc.save();
-          doc.rect(0, 0, pW, IMG_H).clip();
-          doc.image(secImg, 0, 0, { width: pW });
+          doc.rect(imgX, imgY, IMG_BOX_W, IMG_BOX_H).clip();
+          doc.image(secImg, imgX, imgY, { fit: [IMG_BOX_W, IMG_BOX_H], align: 'center', valign: 'center' });
           doc.restore();
-        } catch {
-          doc.rect(0, 0, pW, IMG_H).fill(theme.primary);
-        }
-      } else {
-        // Fallback: bloque de color con patrón geométrico
-        doc.rect(0, 0, pW, IMG_H).fill(theme.primary);
-        // Círculos decorativos
-        doc.save();
-        doc.fillOpacity(0.12);
-        doc.circle(pW * 0.82, IMG_H * 0.3, 80).fill(theme.accent);
-        doc.circle(pW * 0.92, IMG_H * 0.9, 50).fill('#ffffff');
-        doc.restore();
+        } catch { /* imagen no disponible */ }
       }
 
-      // Overlay degradado simulado (2 capas: leve arriba, oscuro abajo)
-      doc.save();
-      doc.fillOpacity(0.20);
-      doc.rect(0, 0, pW, IMG_H * 0.45).fill('#000000');
-      doc.restore();
-      doc.save();
-      doc.fillOpacity(0.68);
-      doc.rect(0, IMG_H * 0.45, pW, IMG_H * 0.55).fill('#000000');
-      doc.restore();
+      // Línea de acento izquierda
+      doc.fillOpacity(1).rect(ML, CONTENT_Y - 4, 3, MAX_Y - CONTENT_Y + 4).fill(theme.accent);
 
-      // Chip número de sección (top-right)
-      doc.fillOpacity(1);
-      doc.rect(pW - 54, 0, 54, 30).fill(theme.accent);
-      doc.fillColor('#ffffff')
-         .font('Helvetica-Bold')
-         .fontSize(12)
-         .text(String(idx + 1).padStart(2, '0'), pW - 54, 9, { width: 54, align: 'center' });
-
-      // Línea de acento fina sobre el título
-      doc.fillOpacity(1);
-      doc.rect(ML, IMG_H - 48, 28, 2.5).fill(theme.accent);
-
-      // Título de sección (bottom-left del hero)
-      if (sec.heading) {
-        doc.fillColor('#ffffff')
-           .fillOpacity(1)
-           .font('Helvetica-Bold')
-           .fontSize(19)
-           .text(sec.heading, ML, IMG_H - 42, { width: pCW - 70, lineGap: 3 });
-      }
-
-      // ── Tarjeta de contenido (card blanca flotante sobre fondo tintado)
-      // Sombra simulada
-      doc.save();
-      doc.fillOpacity(0.07);
-      doc.rect(ML + 4, CARD_Y + 4, pCW, CARD_H).fill('#000000');
-      doc.restore();
-
-      // Card blanca
-      doc.fillOpacity(1);
-      doc.rect(ML, CARD_Y, pCW, CARD_H).fill('#ffffff');
-
-      // Borde izquierdo de acento (4px)
-      doc.rect(ML, CARD_Y, 4, CARD_H).fill(theme.accent);
-
-      // ── Contenido dentro de la card
-      const INNER_X = ML + 18;
-      const INNER_W = pCW - 28;
-      const MAX_Y   = CARD_Y + CARD_H - 16;
-      let curY = CARD_Y + 18;
+      let curY = CONTENT_Y;
+      const INNER_X = ML + 12;
+      const INNER_W = CONTENT_W - 12;
 
       if (sec.content) {
         const paragraphs = sec.content.split(/\n\n+/);
@@ -414,7 +398,7 @@ async function generatePDF(title, sections = []) {
               if (curY >= MAX_Y - 10) break;
               const clean = item.replace(/^[-•*]\s*/, '').trim();
               doc.fillColor(theme.accent).fillOpacity(1)
-                 .circle(INNER_X - 8, curY + 5.5, 2.5).fill();
+                 .circle(INNER_X - 4, curY + 5.5, 2.5).fill();
               doc.fillColor('#374151').fillOpacity(1)
                  .font('Helvetica').fontSize(10)
                  .text(clean, INNER_X, curY, { width: INNER_W, align: 'justify', lineGap: 3 });
