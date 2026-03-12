@@ -50,8 +50,11 @@ async function _downloadImage(url) {
   return buf.length > 8192 ? buf : null;
 }
 
-// offset: posición inicial en resultados DDG → imágenes distintas del mismo tema
-async function _getDDGImageUrl(keyword, offset = 0) {
+/**
+ * Trae hasta `count` URLs de imágenes de DDG en una sola búsqueda,
+ * en orden de relevancia (la #1 es la más relevante, la #2 la siguiente, etc.)
+ */
+async function _getDDGImageUrls(keyword, count) {
   const q = keyword;
   const pageRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(q)}&ia=images`, {
     headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
@@ -59,52 +62,92 @@ async function _getDDGImageUrl(keyword, offset = 0) {
   });
   const html = await pageRes.text();
   const vqd  = (html.match(/vqd=['"]([^'"]+)['"]/) || [])[1];
-  if (!vqd) return null;
+  if (!vqd) return [];
 
   const apiUrl = 'https://duckduckgo.com/i.js?' + new URLSearchParams({
-    q, o: 'json', p: '1', s: String(offset), u: 'bing', f: ',,,', l: 'en-us', vqd,
+    q, o: 'json', p: '1', s: '0', u: 'bing', f: ',,,', l: 'en-us', vqd,
   });
   const apiRes = await fetch(apiUrl, {
     headers: { 'User-Agent': UA, 'Referer': 'https://duckduckgo.com/', 'Accept': 'application/json' },
     signal: AbortSignal.timeout(8000),
   });
   const json    = await apiRes.json();
-  const results = json.results || [];
-  const good = results.find(r => r.image?.startsWith('https') && (r.width || 0) >= 600);
-  return good?.image || results.find(r => r.image?.startsWith('https'))?.image || null;
+  const results = (json.results || []).filter(r => r.image?.startsWith('https') && (r.width || 0) >= 600);
+  return results.slice(0, count).map(r => r.image);
 }
 
-// offset: permite traer imágenes distintas del mismo tema para cada sección
-async function fetchCoverImage(keyword, offset = 0) {
-  if (!keyword) return null;
+/**
+ * Combina el título principal + heading de sección para una búsqueda contextual.
+ * Ej: "fútbol" + "Historia del Balón" → "fútbol balón historia"
+ */
+function sectionKeyword(mainTitle, sectionHeading) {
+  const stop = new Set(['de','del','la','el','los','las','un','una','para','con','en','por','que','y','a','o','e','como','desde','hasta','sobre','sus','este','esta','entre','muy','mas','más']);
+  const clean = t => (t || '').toLowerCase().replace(/[^\w\sáéíóúñü]/gi, '').split(/\s+/).filter(w => w.length > 2 && !stop.has(w));
+  const main = clean(mainTitle).slice(0, 2);
+  const sec  = clean(sectionHeading).slice(0, 2);
+  return [...main, ...sec].join(' ') || titleToKeyword(mainTitle);
+}
 
+/**
+ * Busca imágenes para todo el documento con keywords específicos por sección
+ * y deduplicación por URL — si la imagen #1 ya fue usada, toma la #2, etc.
+ *
+ * coverKeyword: keyword para la portada (null = sin imagen de portada)
+ * sectionKeywords: array de keywords uno por sección/slide
+ * Retorna: { coverBuf, sectionBufs[] }
+ */
+async function fetchDocImages(coverKeyword, sectionKeywords) {
+  const allKeywords = coverKeyword ? [coverKeyword, ...sectionKeywords] : [...sectionKeywords];
+
+  // A. Unsplash: cada keyword busca por separado → imágenes distintas por naturaleza
   const uKey = process.env.UNSPLASH_ACCESS_KEY;
   if (uKey) {
     try {
-      // Unsplash random ya devuelve distintas imágenes por naturaleza
-      const r = await fetch(
-        `https://api.unsplash.com/photos/random?query=${encodeURIComponent(keyword)}&orientation=landscape&count=1`,
-        { headers: { 'Authorization': `Client-ID ${uKey}`, 'Accept-Version': 'v1' }, signal: AbortSignal.timeout(7000) }
+      const results = await Promise.allSettled(
+        allKeywords.map(kw => fetch(
+          `https://api.unsplash.com/photos/random?query=${encodeURIComponent(kw)}&orientation=landscape&count=1`,
+          { headers: { 'Authorization': `Client-ID ${uKey}`, 'Accept-Version': 'v1' }, signal: AbortSignal.timeout(7000) }
+        ).then(r => r.ok ? r.json() : null))
       );
-      if (r.ok) {
-        const [photo] = await r.json();
-        if (photo?.urls?.regular) {
-          const buf = await _downloadImage(photo.urls.regular);
-          if (buf) return buf;
-        }
+      const bufs = await Promise.allSettled(
+        results.map(async r => {
+          const photos = r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : [];
+          const url = photos[0]?.urls?.regular;
+          return url ? _downloadImage(url) : null;
+        })
+      );
+      const imgs = bufs.map(r => r.status === 'fulfilled' ? r.value : null);
+      if (imgs.filter(Boolean).length >= 1) {
+        return coverKeyword
+          ? { coverBuf: imgs[0] || null, sectionBufs: imgs.slice(1) }
+          : { coverBuf: null, sectionBufs: imgs };
       }
     } catch {}
   }
 
-  try {
-    const imageUrl = await _getDDGImageUrl(keyword, offset);
-    if (imageUrl) {
-      const buf = await _downloadImage(imageUrl);
-      if (buf) return buf;
-    }
-  } catch {}
+  // B. DDG: por cada keyword obtener hasta 8 candidatos en paralelo,
+  // luego seleccionar el primero no duplicado por URL
+  const candidateLists = await Promise.allSettled(
+    allKeywords.map(kw => _getDDGImageUrls(kw, 8))
+  );
 
-  return null;
+  const usedUrls = new Set();
+  const selectedUrls = candidateLists.map(res => {
+    const urls = res.status === 'fulfilled' ? (res.value || []) : [];
+    const url  = urls.find(u => !usedUrls.has(u));
+    if (url) usedUrls.add(url);
+    return url || null;
+  });
+
+  // Descargar las seleccionadas en paralelo
+  const bufs = await Promise.allSettled(
+    selectedUrls.map(url => url ? _downloadImage(url) : Promise.resolve(null))
+  );
+  const imgs = bufs.map(r => r.status === 'fulfilled' ? r.value : null);
+
+  return coverKeyword
+    ? { coverBuf: imgs[0] || null, sectionBufs: imgs.slice(1) }
+    : { coverBuf: null, sectionBufs: imgs };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -392,17 +435,15 @@ async function generatePDF(title, sections = [], opts = {}) {
   const theme   = getTheme(title);
   const keyword = titleToKeyword(title);
 
-  // Imágenes: solo si useImages=true. Mismo keyword (tema principal) pero offset
-  // distinto por sección → imágenes variadas del mismo tema
+  // Portada usa keyword del título; cada sección usa su keyword específico.
+  // Deduplicación por URL: si la primera imagen ya fue usada, toma la siguiente.
   let coverImgBuf    = null;
   let sectionImgBufs = sections.map(() => null);
   if (useImages) {
-    const results = await Promise.allSettled([
-      fetchCoverImage(keyword, 0),
-      ...sections.map((_, i) => fetchCoverImage(keyword, (i + 1) * 5)),
-    ]);
-    coverImgBuf    = results[0].status === 'fulfilled' ? results[0].value : null;
-    sectionImgBufs = results.slice(1).map(r => r.status === 'fulfilled' ? r.value : null);
+    const secKeywords = sections.map(sec => sectionKeyword(title, sec.heading || ''));
+    const { coverBuf, sectionBufs } = await fetchDocImages(keyword, secKeywords);
+    coverImgBuf    = coverBuf;
+    sectionImgBufs = sectionBufs;
   }
 
   const coverFn   = style === 'visual' ? _pdfCoverVisual   : style === 'technical' ? _pdfCoverTechnical   : _pdfCoverClean;
@@ -443,13 +484,15 @@ async function generatePPTX(title, slides = [], opts = {}) {
   const theme   = getTheme(title);
   const keyword = titleToKeyword(title);
 
-  // Imágenes: mismo keyword (tema principal) pero offset distinto por slide
+  // PPTX: sin imagen en portada ni slide final. Cada slide de contenido
+  // busca con su keyword específico; deduplicación por URL.
   let slideDataUrls = slides.map(() => null);
   if (useImages) {
-    const results = await Promise.allSettled(slides.map((_, i) => fetchCoverImage(keyword, i * 5)));
-    slideDataUrls = results.map(r => {
-      if (r.status !== 'fulfilled' || !r.value) return null;
-      try { return 'data:image/jpeg;base64,' + r.value.toString('base64'); } catch { return null; }
+    const slideKws = slides.map(s => sectionKeyword(title, s.title || ''));
+    const { sectionBufs } = await fetchDocImages(null, slideKws);  // null = sin portada
+    slideDataUrls = sectionBufs.map(buf => {
+      if (!buf) return null;
+      try { return 'data:image/jpeg;base64,' + buf.toString('base64'); } catch { return null; }
     });
   }
 
