@@ -9,6 +9,7 @@ const { getMessageText, getInteractiveResponse, sendButtonMessage, PREFIX } = re
 const {
   getOnboardingState,
   startOnboarding,
+  startConfigureMenu,
   handleOnboardingStep,
   loadPersonalityIfNeeded,
   updatePersonality,
@@ -667,9 +668,9 @@ function setupRouter(sock, groqService) {
           }
         }
 
-        // /configurar - reiniciar onboarding completo (nombre, uso, tono)
+        // /configurar - menú para editar perfil (nombre, uso, tono o todo)
         if (/^\/configurar$/i.test(text)) {
-          await resetOnboarding(sock, jid, pushName, groqService);
+          await startConfigureMenu(sock, jid, pushName, groqService);
           continue;
         }
 
