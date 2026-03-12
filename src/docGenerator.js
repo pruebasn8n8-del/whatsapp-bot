@@ -123,7 +123,25 @@ function titleToKeyword(title) {
     .replace(/[^\w\s]/g, '')
     .split(/\s+/)
     .filter(w => w.length > 3 && !stop.has(w));
-  return words.slice(0, 3).join(',') || 'minimal abstract';
+  return words.slice(0, 3).join(' ') || 'minimal abstract';
+}
+
+/**
+ * Combina el título principal con el título de una sección/slide
+ * para búsquedas de imagen más contextuales.
+ * Ej: mainTitle="Rocket League", sectionTitle="Competencia Profesional"
+ *   → "rocket league competencia profesional"
+ */
+function sectionKeyword(mainTitle, sectionTitle) {
+  const stop = new Set(['de','del','la','el','los','las','un','una','para','con','en','por','que','y','a','o','e']);
+  const words = (text) => (text || '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !stop.has(w));
+  const main = words(mainTitle).slice(0, 2);
+  const sec  = words(sectionTitle).slice(0, 2);
+  return [...main, ...sec].join(' ') || titleToKeyword(mainTitle);
 }
 
 /** Fecha formateada en español */
@@ -144,9 +162,10 @@ async function generatePDF(title, sections = []) {
   const keyword = titleToKeyword(title);
 
   // Fetch portada + imágenes de cada sección en paralelo
+  // Cada sección combina el título del doc + el heading para búsqueda contextual
   const [imgBuf, ...sectionImgsBuf] = await Promise.all([
     fetchCoverImage(keyword),
-    ...sections.map(sec => fetchCoverImage(sec.heading || keyword)),
+    ...sections.map(sec => fetchCoverImage(sectionKeyword(title, sec.heading || ''))),
   ]);
 
   return new Promise((resolve, reject) => {
@@ -436,9 +455,9 @@ async function generatePPTX(title, slides = []) {
   const theme   = getTheme(title);
   const keyword = titleToKeyword(title);
 
-  // Imágenes por slide (no para portada/final): una por slide, en paralelo
+  // Imágenes por slide: combina título del doc + título de la slide para búsqueda contextual
   const slideImgResults = await Promise.allSettled(
-    slides.map(s => fetchCoverImage(s.title || keyword))
+    slides.map(s => fetchCoverImage(sectionKeyword(title, s.title || '')))
   );
   const slideDataUrls = slideImgResults.map(r => {
     if (r.status !== 'fulfilled' || !r.value) return null;
@@ -689,7 +708,7 @@ async function detectDocumentRequest(text, groqService) {
       model: 'llama-3.1-8b-instant',
       messages: [{
         role: 'user',
-        content: `¿El siguiente mensaje es una petición para crear un documento? Si es PDF o documento de texto responde "pdf", si es PowerPoint/presentación/diapositivas responde "pptx", si no es ninguno responde "no".\n\nMensaje: "${text}"\n\nResponde SOLO con: pdf, pptx, o no`,
+        content: `¿El siguiente mensaje es una petición para crear un archivo o documento?\n\n- Si pide PowerPoint, presentación, diapositivas, PPT o slides → responde "pptx"\n- Si pide PDF, documento, informe, reporte, ensayo, propuesta, plan, manual, guía, o cualquier otro archivo de texto → responde "pdf"\n- Si NO es una petición de crear un archivo → responde "no"\n\nMensaje: "${text}"\n\nResponde SOLO con: pdf, pptx, o no`,
       }],
       max_tokens: 5,
       temperature: 0,
