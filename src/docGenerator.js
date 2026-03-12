@@ -143,26 +143,33 @@ async function generatePPTX(title, slides = []) {
 // ──────────────────────────────────────────────────────────
 // Detección de intención de documento
 // ──────────────────────────────────────────────────────────
-const ACTION_RE   = /\b(crea|cre[ao]|haz|hazme|genera|generar|genera[rm]e|realiza|dame|necesito|quiero|hacer|elabora|prepara|arma|produce)\b/i;
-const PDF_RE      = /\bpdf\b/i;
-const PPT_RE      = /\b(ppt|pptx|powerpoint|presentaci[oó]n|diapositiva[s]?)\b/i;
-const DOC_RE      = /\b(documento|informe|reporte|resum[ei]n\s+ejecutivo|ensayo|propuesta|plan|manual|guía|guia)\b/i;
-
 /**
- * Detecta si el texto es una petición de documento.
+ * Usa Groq para detectar si el texto es una petición de documento.
  * Retorna 'pdf' | 'pptx' | null
  */
-function detectDocumentRequest(text) {
-  const t = text.toLowerCase();
-  const hasAction = ACTION_RE.test(t);
+async function detectDocumentRequest(text, groqService) {
+  // Descarte rápido: si no hay palabras clave de acción o documento, no gastar token
+  if (!/\b(crea|haz|hazme|genera|realiza|dame|necesito|quiero|hacer|elabora|prepara|arma|produce|documento|informe|reporte|presentaci|diapositiva|pdf|ppt|power\s*point|slide|ensayo|propuesta|plan|manual|guía)\b/i.test(text)) {
+    return null;
+  }
 
-  if (hasAction && PPT_RE.test(t)) return 'pptx';
-  if (PPT_RE.test(t)) return 'pptx'; // "presentación sobre X" sin verbo
-
-  if (hasAction && (PDF_RE.test(t) || DOC_RE.test(t))) return 'pdf';
-  if (PDF_RE.test(t) && DOC_RE.test(t)) return 'pdf'; // "un pdf del reporte"
-
-  return null;
+  try {
+    const res = await groqService.client.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      messages: [{
+        role: 'user',
+        content: `¿El siguiente mensaje es una petición para crear un documento? Si es PDF o documento de texto responde "pdf", si es PowerPoint/presentación/diapositivas responde "pptx", si no es ninguno responde "no".\n\nMensaje: "${text}"\n\nResponde SOLO con: pdf, pptx, o no`,
+      }],
+      max_tokens: 5,
+      temperature: 0,
+    });
+    const answer = (res.choices[0]?.message?.content || '').trim().toLowerCase();
+    if (answer.includes('pptx') || answer.includes('ppt')) return 'pptx';
+    if (answer.includes('pdf')) return 'pdf';
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 module.exports = { generatePDF, generatePPTX, detectDocumentRequest };

@@ -783,7 +783,7 @@ function setupRouter(sock, groqService) {
         }
 
         // ── Generación de documentos (PDF / PPTX) ──────────────────────
-        const docType = detectDocumentRequest(text);
+        const docType = await detectDocumentRequest(text, groqService);
         if (docType) {
           await loadPersonalityIfNeeded(jid, groqService);
           await sock.sendPresenceUpdate('composing', jid);
