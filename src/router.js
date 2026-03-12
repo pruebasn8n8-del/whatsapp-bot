@@ -814,10 +814,19 @@ function setupRouter(sock, groqService) {
             try {
               structure = JSON.parse(raw);
             } catch {
-              // Reparar JSON con saltos de línea literales dentro de strings o trailing commas
-              const repaired = raw
-                .replace(/\r\n|\r|\n/g, ' ')
-                .replace(/,\s*([}\]])/g, '$1');
+              // Reparar JSON: escapar saltos de línea DENTRO de strings (no los estructurales)
+              // y quitar trailing commas. Usa parser char-by-char para distinguir contexto.
+              let inStr = false, esc = false, repaired = '';
+              for (const ch of raw) {
+                if (esc) { repaired += ch; esc = false; continue; }
+                if (ch === '\\') { esc = true; repaired += ch; continue; }
+                if (ch === '"') { inStr = !inStr; repaired += ch; continue; }
+                if (inStr && (ch === '\n' || ch === '\r')) {
+                  repaired += '\\n'; continue; // preservar como \n dentro del string
+                }
+                repaired += ch;
+              }
+              repaired = repaired.replace(/,\s*([}\]])/g, '$1');
               structure = JSON.parse(repaired);
             }
             let fileBuffer, fileName, mimeType;

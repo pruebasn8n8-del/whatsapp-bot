@@ -266,11 +266,14 @@ function _stripEmoji(str) {
  */
 function _cleanForRender(text) {
   return (text || '')
-    .replace(/^#{1,6}\s*/gm, '')          // ## al inicio de línea
-    .replace(/\*\*([^*]*)\*\*/g, '$1')    // **negrita**
-    .replace(/(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, '$1') // *itálica* sin tocar **
-    .replace(/`([^`]*)`/g, '$1')          // `inline code`
-    .replace(/^\s*>\s*/gm, '')            // > blockquote
+    .replace(/^#{1,6}\s*/gm, '')           // ## al inicio de línea
+    .replace(/#{2,}/g, '')                 // ## que quedaron inline
+    .replace(/\*\*([^*\n]*)\*\*/g, '$1')  // **negrita** → texto
+    .replace(/\*([^*\n]+)\*/g, '$1')       // *itálica* → texto
+    .replace(/`([^`\n]*)`/g, '$1')         // `code` → texto
+    .replace(/^\s*>\s*/gm, '')             // > blockquote
+    .replace(/\*{1,}/g, '')               // * sueltos no cerrados
+    .replace(/\s{2,}/g, ' ')              // espacios dobles
     .trim();
 }
 
@@ -313,6 +316,43 @@ function splitInlineSegments(line) {
   }
   if (last < line.length) segments.push({ text: line.slice(last), bold: false, code: false });
   return segments.length > 0 ? segments : [{ text: line, bold: false, code: false }];
+}
+
+/**
+ * Renderiza una línea con soporte de inline bold/code usando splitInlineSegments.
+ * Úsalo en bullets, listas numeradas, sub-bullets — contextos donde el texto puede
+ * tener **negrita** o `code` inline que queremos preservar, no limpiar.
+ * fontSizeCode = baseFontSize - 1.5 para Courier.
+ */
+function _renderInlineLine(doc, rawText, x, y, w, baseFontSize, baseColor, opts = {}) {
+  const text = _stripEmoji(rawText);
+  const segs = splitInlineSegments(text);
+  const hasSpecial = segs.some(s => s.bold || s.code);
+
+  if (!hasSpecial) {
+    const clean = _cleanForRender(text);
+    if (!clean) return;
+    doc.fillColor(baseColor).fillOpacity(1).font('Helvetica').fontSize(baseFontSize)
+       .text(clean, x, y, { width: w, lineGap: opts.lineGap ?? 3, align: opts.align || 'left' });
+    return;
+  }
+
+  segs.forEach((seg, i) => {
+    if (!seg.text) return;
+    const isLast = i === segs.length - 1;
+    if (seg.code) {
+      doc.fillColor('#1E293B').fillOpacity(1).font('Courier').fontSize(baseFontSize - 1.5)
+         .text(seg.text, i === 0 ? x : undefined, i === 0 ? y : undefined, {
+           continued: !isLast, width: w, lineGap: opts.lineGap ?? 3,
+         });
+    } else {
+      doc.fillColor(seg.bold ? '#1F2937' : baseColor).fillOpacity(1)
+         .font(seg.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(baseFontSize)
+         .text(seg.text, i === 0 ? x : undefined, i === 0 ? y : undefined, {
+           continued: !isLast, width: w, lineGap: opts.lineGap ?? 3, align: opts.align || 'left',
+         });
+    }
+  });
 }
 
 // ── PDF Code Block Renderer ──────────────────────────────────────────────────
@@ -439,11 +479,10 @@ function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
       if (num) {
         if (curY + 20 > maxY) break;
         const numStr = num[1] + '.';
-        const numW = 20;
+        const numW = 22;
         doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(10.5)
            .text(numStr, x, curY, { width: numW, lineBreak: false });
-        doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
-           .text(_cleanForRender(_stripEmoji(num[2])), x + numW + 2, curY, { width: w - numW - 2, lineGap: 3 });
+        _renderInlineLine(doc, num[2], x + numW + 2, curY, w - numW - 2, 10.5, '#374151', { lineGap: 3 });
         curY = Math.min(doc.y + 4, maxY);
         continue;
       }
@@ -454,8 +493,7 @@ function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
         if (curY + 18 > maxY) break;
         const ix = x + 18;
         doc.fillColor('#9CA3AF').fillOpacity(1).circle(ix - 6, curY + 5, 2).fill();
-        doc.fillColor('#6B7280').fillOpacity(1).font('Helvetica').fontSize(9.5)
-           .text(_cleanForRender(_stripEmoji(subBullet[1])), ix, curY, { width: w - 20, lineGap: 2 });
+        _renderInlineLine(doc, subBullet[1], ix, curY, w - 20, 9.5, '#6B7280', { lineGap: 2 });
         curY = Math.min(doc.y + 3, maxY);
         continue;
       }
@@ -465,8 +503,7 @@ function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
       if (bullet) {
         if (curY + 20 > maxY) break;
         doc.fillColor(theme.accent).fillOpacity(1).circle(x - 5, curY + 5.5, 2.5).fill();
-        doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10)
-           .text(_cleanForRender(_stripEmoji(bullet[1])), x, curY, { width: w, lineGap: 3 });
+        _renderInlineLine(doc, bullet[1], x, curY, w, 10, '#374151', { lineGap: 3 });
         curY = Math.min(doc.y + 4, maxY);
         continue;
       }
@@ -481,37 +518,10 @@ function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
         continue;
       }
 
-      // Párrafo normal (puede tener inline code y negrita)
+      // Párrafo normal — _renderInlineLine maneja bold/code/plain con limpieza
       if (curY + 14 > maxY) break;
-      const segs2 = splitInlineSegments(line);
-      const hasInline = segs2.some(s => s.bold || s.code);
-      if (hasInline) {
-        segs2.forEach((s2, i) => {
-          const isLast = i === segs2.length - 1;
-          if (!s2.text) return;
-          const cleanText = _stripEmoji(s2.text);
-          if (s2.code) {
-            doc.fillColor('#1E293B').fillOpacity(1).font('Courier').fontSize(9)
-               .text(cleanText, i === 0 ? x : undefined, i === 0 ? curY : undefined, {
-                 continued: !isLast, width: w, lineGap: 4,
-               });
-          } else {
-            doc.fillColor('#374151').fillOpacity(1)
-               .font(s2.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10.5)
-               .text(cleanText, i === 0 ? x : undefined, i === 0 ? curY : undefined, {
-                 continued: !isLast, width: w, lineGap: 4, align: 'justify',
-               });
-          }
-        });
-        curY = Math.min(doc.y + 8, maxY);
-      } else {
-        // Párrafo sin markdown reconocido: limpiar cualquier artefacto residual
-        const cleanLine = _cleanForRender(_stripEmoji(line));
-        if (!cleanLine) { curY = Math.min(curY + 4, maxY); continue; }
-        doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
-           .text(cleanLine, x, curY, { width: w, align: 'justify', lineGap: 4 });
-        curY = Math.min(doc.y + 8, maxY);
-      }
+      _renderInlineLine(doc, line, x, curY, w, 10.5, '#374151', { lineGap: 4, align: 'justify' });
+      curY = Math.min(doc.y + 8, maxY);
     }
   }
 
