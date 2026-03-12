@@ -803,8 +803,9 @@ function setupRouter(sock, groqService) {
                 { role: 'system', content: 'Eres un experto generando estructuras JSON para documentos profesionales. El contenido debe ser completo, detallado y bien redactado. Responde SOLO con el JSON, sin texto adicional ni bloques de código.' },
                 { role: 'user', content: structurePrompt },
               ],
-              max_tokens: 6000,
+              max_tokens: docType === 'pptx' ? 8000 : 6000,
               temperature: 0.4,
+              response_format: { type: 'json_object' },
             });
 
             let raw = (structRes.choices[0]?.message?.content || '').trim();
