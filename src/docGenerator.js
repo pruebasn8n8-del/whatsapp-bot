@@ -50,11 +50,36 @@ async function _downloadImage(url) {
   return buf.length > 8192 ? buf : null;
 }
 
+// Dominios bloqueados: streams, redes sociales, propaganda
+const BLOCKED_DOMAINS = [
+  'twitch.tv','twitter.com','x.com','instagram.com','tiktok.com',
+  'youtube.com','youtu.be','reddit.com','facebook.com','pinterest.com',
+  'tumblr.com','discord.com','patreon.com','streamable.com','clips.twitch.tv',
+];
+function _isBlockedUrl(url) {
+  if (!url) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return BLOCKED_DOMAINS.some(d => host === d || host.endsWith('.' + d));
+  } catch { return false; }
+}
+
 /**
- * Trae hasta `count` URLs de imágenes de DDG en una sola búsqueda,
- * en orden de relevancia (la #1 es la más relevante, la #2 la siguiente, etc.)
+ * Cuántas palabras del keyword aparecen en el título/URL del candidato.
+ * Cuanto mayor el score, más relevante es la imagen al tema.
  */
-async function _getDDGImageUrls(keyword, count) {
+function _scoreCandidate(candidate, keyword) {
+  const kws = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  if (kws.length === 0) return 1;
+  const text = [candidate.title, candidate.url, candidate.source].filter(Boolean).join(' ').toLowerCase();
+  return kws.filter(w => text.includes(w)).length;
+}
+
+/**
+ * Trae hasta `count` candidatos de DDG con metadata completa (título, url, imagen).
+ * Filtra dominios bloqueados y mínimo ancho 600px.
+ */
+async function _getDDGCandidates(keyword, count) {
   const q = keyword;
   const pageRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(q)}&ia=images`, {
     headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
@@ -71,9 +96,15 @@ async function _getDDGImageUrls(keyword, count) {
     headers: { 'User-Agent': UA, 'Referer': 'https://duckduckgo.com/', 'Accept': 'application/json' },
     signal: AbortSignal.timeout(8000),
   });
-  const json    = await apiRes.json();
-  const results = (json.results || []).filter(r => r.image?.startsWith('https') && (r.width || 0) >= 600);
-  return results.slice(0, count).map(r => r.image);
+  const json = await apiRes.json();
+  return (json.results || [])
+    .filter(r =>
+      r.image?.startsWith('https') &&
+      (r.width || 0) >= 600 &&
+      !_isBlockedUrl(r.image) &&
+      !_isBlockedUrl(r.url)
+    )
+    .slice(0, count);
 }
 
 /**
@@ -135,18 +166,30 @@ async function fetchDocImages(coverKeyword, sectionKeywords) {
     } catch {}
   }
 
-  // B. DDG: por cada keyword obtener hasta 8 candidatos en paralelo,
-  // luego seleccionar el primero no duplicado por URL
+  // B. DDG: candidatos con metadata completa (título, url, imagen) para scoring
   const candidateLists = await Promise.allSettled(
-    allKeywords.map(kw => _getDDGImageUrls(kw, 8))
+    allKeywords.map(kw => _getDDGCandidates(kw, 15))
   );
 
   const usedUrls = new Set();
-  const selectedUrls = candidateLists.map(res => {
-    const urls = res.status === 'fulfilled' ? (res.value || []) : [];
-    const url  = urls.find(u => !usedUrls.has(u));
-    if (url) usedUrls.add(url);
-    return url || null;
+  const selectedUrls = candidateLists.map((res, ki) => {
+    const keyword    = allKeywords[ki];
+    const candidates = res.status === 'fulfilled' ? (res.value || []) : [];
+
+    // Puntuar por coincidencia de keywords en título/URL y ordenar de mayor a menor
+    const scored = candidates
+      .map(c => ({ ...c, score: _scoreCandidate(c, keyword) }))
+      .sort((a, b) => b.score - a.score);
+
+    // Tomar el primero relevante (score > 0) no duplicado
+    const pick = scored.find(c => c.score > 0 && !usedUrls.has(c.image));
+    if (pick) { usedUrls.add(pick.image); return pick.image; }
+
+    // Fallback: primer no duplicado aunque tenga score 0
+    const fallback = scored.find(c => !usedUrls.has(c.image));
+    if (fallback) { usedUrls.add(fallback.image); return fallback.image; }
+
+    return null;
   });
 
   // Descargar las seleccionadas en paralelo
@@ -288,13 +331,14 @@ function _pdfSectionVisual(doc, sec, idx, title, theme, imgBuf) {
   doc.fillOpacity(1).rect(0, 0, W, H).fill(theme.bg);
 
   // Hero image — cover: [W, IMG_H] recorta sin distorsionar
+  // doc.restore() SIEMPRE se llama para liberar el clip, aunque image() falle
   if (imgBuf) {
-    try {
-      doc.save();
-      doc.rect(0, 0, W, IMG_H).clip();
-      doc.image(imgBuf, 0, 0, { cover: [W, IMG_H] });
-      doc.restore();
-    } catch {
+    let imgOk = false;
+    doc.save();
+    doc.rect(0, 0, W, IMG_H).clip();
+    try { doc.image(imgBuf, 0, 0, { cover: [W, IMG_H] }); imgOk = true; } catch {}
+    doc.restore();
+    if (!imgOk) {
       doc.fillOpacity(1).rect(0, 0, W, IMG_H).fill(theme.primary);
     }
   } else {
