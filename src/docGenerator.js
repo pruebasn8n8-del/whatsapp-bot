@@ -50,7 +50,8 @@ async function _downloadImage(url) {
   return buf.length > 8192 ? buf : null;
 }
 
-async function _getDDGImageUrl(keyword) {
+// offset: posición inicial en resultados DDG → imágenes distintas del mismo tema
+async function _getDDGImageUrl(keyword, offset = 0) {
   const q = keyword;
   const pageRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(q)}&ia=images`, {
     headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
@@ -61,7 +62,7 @@ async function _getDDGImageUrl(keyword) {
   if (!vqd) return null;
 
   const apiUrl = 'https://duckduckgo.com/i.js?' + new URLSearchParams({
-    q, o: 'json', p: '1', s: '0', u: 'bing', f: ',,,', l: 'en-us', vqd,
+    q, o: 'json', p: '1', s: String(offset), u: 'bing', f: ',,,', l: 'en-us', vqd,
   });
   const apiRes = await fetch(apiUrl, {
     headers: { 'User-Agent': UA, 'Referer': 'https://duckduckgo.com/', 'Accept': 'application/json' },
@@ -73,12 +74,14 @@ async function _getDDGImageUrl(keyword) {
   return good?.image || results.find(r => r.image?.startsWith('https'))?.image || null;
 }
 
-async function fetchCoverImage(keyword) {
+// offset: permite traer imágenes distintas del mismo tema para cada sección
+async function fetchCoverImage(keyword, offset = 0) {
   if (!keyword) return null;
 
   const uKey = process.env.UNSPLASH_ACCESS_KEY;
   if (uKey) {
     try {
+      // Unsplash random ya devuelve distintas imágenes por naturaleza
       const r = await fetch(
         `https://api.unsplash.com/photos/random?query=${encodeURIComponent(keyword)}&orientation=landscape&count=1`,
         { headers: { 'Authorization': `Client-ID ${uKey}`, 'Accept-Version': 'v1' }, signal: AbortSignal.timeout(7000) }
@@ -94,7 +97,7 @@ async function fetchCoverImage(keyword) {
   }
 
   try {
-    const imageUrl = await _getDDGImageUrl(keyword);
+    const imageUrl = await _getDDGImageUrl(keyword, offset);
     if (imageUrl) {
       const buf = await _downloadImage(imageUrl);
       if (buf) return buf;
@@ -198,34 +201,56 @@ function _pdfCoverVisual(doc, title, sections, theme, imgBuf) {
 
 function _pdfSectionVisual(doc, sec, idx, title, theme, imgBuf) {
   const W = doc.page.width, H = doc.page.height;
-  const ML = 60, MR = 60, FOOTER_H = 32, HEADER_H = 58;
+  const ML = 60, MR = 60;
+  const FOOTER_H = 34;
+  const IMG_H    = Math.round(H * 0.38);
+  const CARD_Y   = IMG_H + 14;
+  const CARD_H   = H - CARD_Y - FOOTER_H - 10;
+  const pCW      = W - ML - MR;
 
-  doc.fillOpacity(1).rect(0, 0, W, H).fill('#ffffff');
-  doc.rect(0, 0, W, HEADER_H).fill(theme.primary);
-  doc.rect(W - 50, 0, 50, HEADER_H).fill(theme.accent);
-  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(14)
-     .text(String(idx + 1).padStart(2, '0'), W - 50, HEADER_H / 2 - 9, { width: 50, align: 'center' });
-  if (sec.heading) {
-    doc.fillColor('#ffffff').fillOpacity(1).font('Helvetica-Bold').fontSize(15)
-       .text(sec.heading, ML, HEADER_H / 2 - 10, { width: W - ML - 58, lineGap: 2 });
-  }
+  // Fondo tintado
+  doc.fillOpacity(1).rect(0, 0, W, H).fill(theme.bg);
 
-  const IMG_W = 178, IMG_H = 155;
-  const imgX = W - MR - IMG_W, imgY = HEADER_H + 18;
+  // Hero image — cover: [W, IMG_H] recorta sin distorsionar
   if (imgBuf) {
-    doc.save().fillOpacity(1).rect(imgX - 5, imgY - 5, IMG_W + 10, IMG_H + 10).fill('#F3F4F6').restore();
-    doc.save().strokeColor('#E5E7EB').lineWidth(1).rect(imgX - 5, imgY - 5, IMG_W + 10, IMG_H + 10).stroke().restore();
     try {
-      doc.save().rect(imgX, imgY, IMG_W, IMG_H).clip();
-      doc.image(imgBuf, imgX, imgY, { fit: [IMG_W, IMG_H], align: 'center', valign: 'center' });
+      doc.save();
+      doc.rect(0, 0, W, IMG_H).clip();
+      doc.image(imgBuf, 0, 0, { cover: [W, IMG_H] });
       doc.restore();
-    } catch {}
+    } catch {
+      doc.fillOpacity(1).rect(0, 0, W, IMG_H).fill(theme.primary);
+    }
+  } else {
+    doc.fillOpacity(1).rect(0, 0, W, IMG_H).fill(theme.primary);
+    doc.save().fillOpacity(0.12);
+    doc.circle(W * 0.82, IMG_H * 0.35, 80).fill(theme.accent);
+    doc.circle(W * 0.92, IMG_H * 0.85, 48).fill('#ffffff');
+    doc.restore();
   }
 
-  const CONTENT_W = imgBuf ? W - ML - MR - IMG_W - 16 : W - ML - MR;
-  const CONTENT_Y = HEADER_H + 14, MAX_Y = H - FOOTER_H - 12;
-  doc.fillOpacity(1).rect(ML, CONTENT_Y, 3, MAX_Y - CONTENT_Y).fill(theme.accent);
-  _pdfText(doc, sec.content, ML + 12, CONTENT_W - 12, CONTENT_Y, MAX_Y, theme);
+  // Overlay degradado sobre el hero
+  doc.save().fillOpacity(0.22).rect(0, 0, W, IMG_H * 0.45).fill('#000000').restore();
+  doc.save().fillOpacity(0.65).rect(0, IMG_H * 0.45, W, IMG_H * 0.55).fill('#000000').restore();
+
+  // Chip número sección
+  doc.fillOpacity(1).rect(W - 54, 0, 54, 30).fill(theme.accent);
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(12)
+     .text(String(idx + 1).padStart(2, '0'), W - 54, 9, { width: 54, align: 'center' });
+
+  // Línea + título sobre el hero
+  doc.fillOpacity(1).rect(ML, IMG_H - 50, 28, 2.5).fill(theme.accent);
+  if (sec.heading) {
+    doc.fillColor('#ffffff').fillOpacity(1).font('Helvetica-Bold').fontSize(19)
+       .text(sec.heading, ML, IMG_H - 43, { width: pCW - 70, lineGap: 3 });
+  }
+
+  // Card flotante con sombra
+  doc.save().fillOpacity(0.07).rect(ML + 4, CARD_Y + 4, pCW, CARD_H).fill('#000000').restore();
+  doc.fillOpacity(1).rect(ML, CARD_Y, pCW, CARD_H).fill('#ffffff');
+  doc.rect(ML, CARD_Y, 4, CARD_H).fill(theme.accent);
+
+  _pdfText(doc, sec.content, ML + 18, pCW - 28, CARD_Y + 18, CARD_Y + CARD_H - 14, theme);
   _pdfFooter(doc, title, idx + 2, theme);
 }
 
@@ -367,13 +392,14 @@ async function generatePDF(title, sections = [], opts = {}) {
   const theme   = getTheme(title);
   const keyword = titleToKeyword(title);
 
-  // Imágenes: solo si useImages=true, y SIEMPRE el keyword del título principal
+  // Imágenes: solo si useImages=true. Mismo keyword (tema principal) pero offset
+  // distinto por sección → imágenes variadas del mismo tema
   let coverImgBuf    = null;
   let sectionImgBufs = sections.map(() => null);
   if (useImages) {
     const results = await Promise.allSettled([
-      fetchCoverImage(keyword),
-      ...sections.map(() => fetchCoverImage(keyword)),
+      fetchCoverImage(keyword, 0),
+      ...sections.map((_, i) => fetchCoverImage(keyword, (i + 1) * 5)),
     ]);
     coverImgBuf    = results[0].status === 'fulfilled' ? results[0].value : null;
     sectionImgBufs = results.slice(1).map(r => r.status === 'fulfilled' ? r.value : null);
@@ -417,10 +443,10 @@ async function generatePPTX(title, slides = [], opts = {}) {
   const theme   = getTheme(title);
   const keyword = titleToKeyword(title);
 
-  // Imágenes: solo si useImages=true, keyword del título para todas las slides
+  // Imágenes: mismo keyword (tema principal) pero offset distinto por slide
   let slideDataUrls = slides.map(() => null);
   if (useImages) {
-    const results = await Promise.allSettled(slides.map(() => fetchCoverImage(keyword)));
+    const results = await Promise.allSettled(slides.map((_, i) => fetchCoverImage(keyword, i * 5)));
     slideDataUrls = results.map(r => {
       if (r.status !== 'fulfilled' || !r.value) return null;
       try { return 'data:image/jpeg;base64,' + r.value.toString('base64'); } catch { return null; }
