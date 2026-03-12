@@ -259,6 +259,21 @@ function _stripEmoji(str) {
     .trim();
 }
 
+/**
+ * Limpia artefactos de markdown que se hayan colado en texto que ya va a renderizarse
+ * como texto plano (headings, bullets, celdas de tabla, etc).
+ * Quita ##, **, *, `  cuando no fueron procesados por el parser de líneas.
+ */
+function _cleanForRender(text) {
+  return (text || '')
+    .replace(/^#{1,6}\s*/gm, '')          // ## al inicio de línea
+    .replace(/\*\*([^*]*)\*\*/g, '$1')    // **negrita**
+    .replace(/(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, '$1') // *itálica* sin tocar **
+    .replace(/`([^`]*)`/g, '$1')          // `inline code`
+    .replace(/^\s*>\s*/gm, '')            // > blockquote
+    .trim();
+}
+
 // ── Bold segment splitter ────────────────────────────────────────────────────
 /**
  * Divide un string en segmentos {text, bold} según **texto**.
@@ -383,40 +398,38 @@ function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
         continue;
       }
 
-      // ## Subtítulo H2
-      const h2 = line.match(/^##\s+(.+)/);
-      if (h2) {
-        if (curY + 30 > maxY) break;
-        curY = Math.min(curY + 6, maxY);
-        doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(13)
-           .text(_stripEmoji(h2[1]), x, curY, { width: w, lineGap: 2 });
-        curY = doc.y + 2;
-        if (curY + 3 <= maxY) {
-          doc.fillOpacity(1).rect(x, curY, 32, 2).fill(theme.accent);
-          curY += 7;
+      // ## Subtítulo H2 (lenient: permite sin espacio y espacios previos)
+      const h2 = line.match(/^\s*#{2,3}\s*(.+)/);
+      if (h2 && !line.match(/^\s*#{4,}/)) {
+        const isH3 = line.trim().startsWith('###');
+        if (isH3) {
+          if (curY + 22 > maxY) break;
+          curY = Math.min(curY + 4, maxY);
+          doc.fillColor(theme.primary).fillOpacity(1).font('Helvetica-Bold').fontSize(11.5)
+             .text(_cleanForRender(_stripEmoji(h2[1])), x, curY, { width: w, lineGap: 2 });
+          curY = doc.y + 6;
+        } else {
+          if (curY + 30 > maxY) break;
+          curY = Math.min(curY + 6, maxY);
+          doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(13)
+             .text(_cleanForRender(_stripEmoji(h2[1])), x, curY, { width: w, lineGap: 2 });
+          curY = doc.y + 2;
+          if (curY + 3 <= maxY) {
+            doc.fillOpacity(1).rect(x, curY, 32, 2).fill(theme.accent);
+            curY += 7;
+          }
         }
         continue;
       }
 
-      // ### Sub-subtítulo H3
-      const h3 = line.match(/^###\s+(.+)/);
-      if (h3) {
-        if (curY + 22 > maxY) break;
-        curY = Math.min(curY + 4, maxY);
-        doc.fillColor(theme.primary).fillOpacity(1).font('Helvetica-Bold').fontSize(11.5)
-           .text(_stripEmoji(h3[1]), x, curY, { width: w, lineGap: 2 });
-        curY = doc.y + 6;
-        continue;
-      }
-
       // > Blockquote
-      const bq = line.match(/^>\s+(.+)/);
+      const bq = line.match(/^>\s*(.+)/);
       if (bq) {
         if (curY + 22 > maxY) break;
         doc.save().fillOpacity(0.08).rect(x, curY - 2, w, 20).fill(theme.primary).restore();
         doc.fillOpacity(1).rect(x, curY - 2, 3, 20).fill(theme.primary);
         doc.fillColor(theme.dark).fillOpacity(0.80).font('Helvetica').fontSize(10)
-           .text(_stripEmoji(bq[1]), x + 10, curY, { width: w - 12, lineGap: 2, italics: false });
+           .text(_cleanForRender(_stripEmoji(bq[1])), x + 10, curY, { width: w - 12, lineGap: 2 });
         curY = Math.min(doc.y + 8, maxY);
         continue;
       }
@@ -430,7 +443,7 @@ function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
         doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(10.5)
            .text(numStr, x, curY, { width: numW, lineBreak: false });
         doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
-           .text(_stripEmoji(num[2]), x + numW + 2, curY, { width: w - numW - 2, lineGap: 3 });
+           .text(_cleanForRender(_stripEmoji(num[2])), x + numW + 2, curY, { width: w - numW - 2, lineGap: 3 });
         curY = Math.min(doc.y + 4, maxY);
         continue;
       }
@@ -442,7 +455,7 @@ function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
         const ix = x + 18;
         doc.fillColor('#9CA3AF').fillOpacity(1).circle(ix - 6, curY + 5, 2).fill();
         doc.fillColor('#6B7280').fillOpacity(1).font('Helvetica').fontSize(9.5)
-           .text(_stripEmoji(subBullet[1]), ix, curY, { width: w - 20, lineGap: 2 });
+           .text(_cleanForRender(_stripEmoji(subBullet[1])), ix, curY, { width: w - 20, lineGap: 2 });
         curY = Math.min(doc.y + 3, maxY);
         continue;
       }
@@ -453,15 +466,15 @@ function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
         if (curY + 20 > maxY) break;
         doc.fillColor(theme.accent).fillOpacity(1).circle(x - 5, curY + 5.5, 2.5).fill();
         doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10)
-           .text(_stripEmoji(bullet[1]), x, curY, { width: w, lineGap: 3 });
+           .text(_cleanForRender(_stripEmoji(bullet[1])), x, curY, { width: w, lineGap: 3 });
         curY = Math.min(doc.y + 4, maxY);
         continue;
       }
 
       // Línea completamente en negrita **texto**
-      if (/^\*\*.+\*\*$/.test(line.trim())) {
+      if (/^\*\*[^*].*\*\*\s*$/.test(line.trim())) {
         if (curY + 18 > maxY) break;
-        const clean = _stripEmoji(line.trim().replace(/^\*\*|\*\*$/g, ''));
+        const clean = _stripEmoji(line.trim().replace(/^\*\*|\*\*\s*$/g, ''));
         doc.fillColor('#1F2937').fillOpacity(1).font('Helvetica-Bold').fontSize(10.5)
            .text(clean, x, curY, { width: w, lineGap: 3 });
         curY = Math.min(doc.y + 6, maxY);
@@ -478,11 +491,6 @@ function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
           if (!s2.text) return;
           const cleanText = _stripEmoji(s2.text);
           if (s2.code) {
-            // Fondo gris para inline code
-            const codeW = cleanText.length * 6 + 6;
-            if (i === 0) {
-              doc.save().fillOpacity(1).rect(x, curY - 1, Math.min(codeW, w), 14).fill('#F1F5F9').restore();
-            }
             doc.fillColor('#1E293B').fillOpacity(1).font('Courier').fontSize(9)
                .text(cleanText, i === 0 ? x : undefined, i === 0 ? curY : undefined, {
                  continued: !isLast, width: w, lineGap: 4,
@@ -497,8 +505,11 @@ function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
         });
         curY = Math.min(doc.y + 8, maxY);
       } else {
+        // Párrafo sin markdown reconocido: limpiar cualquier artefacto residual
+        const cleanLine = _cleanForRender(_stripEmoji(line));
+        if (!cleanLine) { curY = Math.min(curY + 4, maxY); continue; }
         doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
-           .text(_stripEmoji(line), x, curY, { width: w, align: 'justify', lineGap: 4 });
+           .text(cleanLine, x, curY, { width: w, align: 'justify', lineGap: 4 });
         curY = Math.min(doc.y + 8, maxY);
       }
     }
@@ -882,6 +893,8 @@ function _pdfCoverTechnical(doc, title, sections, theme) {
 function _pdfSectionTechnical(doc, sec, idx, title, theme) {
   const W = doc.page.width, H = doc.page.height;
   const ML = 60, MR = 60, CW = W - ML - MR, FOOTER_H = 32;
+  const CHIP_Y = 28; // margen superior del chip (antes era 14)
+  const CHIP = 52;
 
   doc.fillOpacity(1).rect(0, 0, W, H).fill('#ffffff');
   doc.rect(0, 0, W, 4).fill(theme.primary);
@@ -890,18 +903,18 @@ function _pdfSectionTechnical(doc, sec, idx, title, theme) {
      .text(String(idx + 1), W * 0.38, H * 0.12, { width: W * 0.58 });
   doc.restore();
 
-  const CHIP = 52;
-  doc.fillOpacity(1).rect(ML, 14, CHIP, CHIP).fill(theme.accent);
+  doc.fillOpacity(1).rect(ML, CHIP_Y, CHIP, CHIP).fill(theme.accent);
   doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18)
-     .text(String(idx + 1).padStart(2, '0'), ML, 14 + CHIP / 2 - 12, { width: CHIP, align: 'center' });
+     .text(String(idx + 1).padStart(2, '0'), ML, CHIP_Y + CHIP / 2 - 12, { width: CHIP, align: 'center' });
 
   if (sec.heading) {
     doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(17)
-       .text(sec.heading, ML + CHIP + 14, 22, { width: CW - CHIP - 16, lineGap: 3 });
+       .text(_cleanForRender(sec.heading), ML + CHIP + 14, CHIP_Y + 8, { width: CW - CHIP - 16, lineGap: 3 });
   }
 
-  doc.fillOpacity(1).rect(ML, 78, CW, 0.8).fill(theme.primary);
-  _pdfRichContent(doc, sec, ML, CW, 88, H - FOOTER_H - 12, theme);
+  const SEP_Y = CHIP_Y + CHIP + 8;
+  doc.fillOpacity(1).rect(ML, SEP_Y, CW, 0.8).fill(theme.primary);
+  _pdfRichContent(doc, sec, ML, CW, SEP_Y + 12, H - FOOTER_H - 12, theme);
   _pdfFooter(doc, title, idx + 2, theme);
 }
 
@@ -942,21 +955,22 @@ function _pdfCoverClean(doc, title, sections, theme) {
 function _pdfSectionClean(doc, sec, idx, title, theme) {
   const W = doc.page.width, H = doc.page.height;
   const ML = 60, MR = 60, CW = W - ML - MR, FOOTER_H = 32;
+  const HDR_H = 68; // altura de la banda de cabecera
 
   doc.fillOpacity(1).rect(0, 0, W, H).fill('#ffffff');
   doc.rect(0, 0, 5, H).fill(theme.accent);
   doc.rect(0, 0, W, 2).fill(theme.primary);
+  doc.save().fillOpacity(1).rect(0, 2, W, HDR_H - 2).fill(theme.bg || '#F9FAFB').restore();
 
-  doc.save().fillOpacity(1).rect(0, 2, W, 44).fill(theme.bg || '#F9FAFB').restore();
-
+  // Número y título con margen superior cómodo
   doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(10)
-     .text(String(idx + 1).padStart(2, '0'), ML, 12);
+     .text(String(idx + 1).padStart(2, '0'), ML, 28);
   if (sec.heading) {
     doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(14)
-       .text(sec.heading, ML + 28, 11, { width: CW - 28, lineGap: 2 });
+       .text(_cleanForRender(sec.heading), ML + 28, 26, { width: CW - 28, lineGap: 2 });
   }
-  doc.fillOpacity(1).rect(ML, 52, CW, 0.5).fill(theme.primary);
-  _pdfRichContent(doc, sec, ML, CW, 62, H - FOOTER_H - 12, theme);
+  doc.fillOpacity(1).rect(ML, HDR_H, CW, 0.5).fill(theme.primary);
+  _pdfRichContent(doc, sec, ML, CW, HDR_H + 14, H - FOOTER_H - 12, theme);
   _pdfFooter(doc, title, idx + 2, theme);
 }
 
