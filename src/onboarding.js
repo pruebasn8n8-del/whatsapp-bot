@@ -112,6 +112,29 @@ function _isValidForStep(step, text) {
 }
 
 // ============================================
+// Validación de nombre con IA (rápida, modelo pequeño)
+// ============================================
+async function _isRealName(text, groqService) {
+  try {
+    const reply = await groqService.client.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      messages: [
+        {
+          role: 'user',
+          content: `¿Es "${text}" un nombre de persona o apodo válido? Responde SOLO con SI o NO. No expliques nada.`,
+        },
+      ],
+      max_tokens: 5,
+      temperature: 0,
+    });
+    const answer = (reply.choices[0]?.message?.content || '').trim().toUpperCase();
+    return answer.startsWith('SI') || answer.startsWith('SÍ') || answer === 'YES';
+  } catch {
+    return true; // si falla la IA, no bloquear
+  }
+}
+
+// ============================================
 // Helpers
 // ============================================
 function parseVibe(text) {
@@ -269,6 +292,10 @@ async function handleOnboardingStep(sock, jid, userText, groqService) {
 
   // ── NAME ───────────────────────────────────────────────────────────
   if (session.step === STEPS.NAME) {
+    if (!(await _isRealName(text, groqService))) {
+      await sock.sendMessage(jid, { text: MSG_RETRY[STEPS.NAME] });
+      return false;
+    }
     const nombre = text.split(' ')[0];
     session.data.nombre = nombre;
     session.step = STEPS.VIBE;
@@ -289,6 +316,10 @@ async function handleOnboardingStep(sock, jid, userText, groqService) {
 
   // ── EDIT_NAME ──────────────────────────────────────────────────────
   if (session.step === STEPS.EDIT_NAME) {
+    if (!(await _isRealName(text, groqService))) {
+      await sock.sendMessage(jid, { text: MSG_RETRY[STEPS.EDIT_NAME] });
+      return false;
+    }
     const nombre = text.split(' ')[0];
     const uso  = session.data.uso  || 'asistencia general';
     const vibe = session.data.vibe || 'casual y relajado';
