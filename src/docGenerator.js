@@ -1,197 +1,383 @@
-// src/docGenerator.js — Generación de PDF y PPTX con diseño profesional
+// src/docGenerator.js — Generación de PDF y PPTX con diseño minimalista moderno
+'use strict';
+
 const PDFDocument = require('pdfkit');
 const PptxGenJS   = require('pptxgenjs');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Paleta de colores
+// Temas adaptativos por tópico
 // ─────────────────────────────────────────────────────────────────────────────
-const C = {
-  primary:   '#0f3460',
-  accent:    '#e94560',
-  dark:      '#16213e',
-  darkest:   '#0a0a1a',
-  white:     '#ffffff',
-  lightGray: '#e8eaf6',
-  midGray:   '#90a4ae',
-  text:      '#263238',
-  textLight: '#546e7a',
+const THEMES = {
+  tech:       { primary: '#0ea5e9', accent: '#06b6d4', dark: '#0c1929', bg: '#f0f9ff', name: 'tech' },
+  nature:     { primary: '#10b981', accent: '#059669', dark: '#022c22', bg: '#f0fdf4', name: 'nature' },
+  finance:    { primary: '#1e40af', accent: '#f59e0b', dark: '#0f172a', bg: '#f8fafc', name: 'finance' },
+  health:     { primary: '#0d9488', accent: '#14b8a6', dark: '#042f2e', bg: '#f0fdfa', name: 'health' },
+  education:  { primary: '#7c3aed', accent: '#8b5cf6', dark: '#1e1b4b', bg: '#faf5ff', name: 'education' },
+  creative:   { primary: '#db2777', accent: '#ec4899', dark: '#500724', bg: '#fdf2f8', name: 'creative' },
+  sports:     { primary: '#ea580c', accent: '#f97316', dark: '#431407', bg: '#fff7ed', name: 'sports' },
+  default:    { primary: '#4f46e5', accent: '#818cf8', dark: '#1e1b4b', bg: '#f5f3ff', name: 'default' },
 };
 
+const THEME_KEYWORDS = {
+  tech:      /\b(tecnolog|software|program|código|ia|inteligencia|artificial|web|app|digital|sistem|comput|datos|red|ciberseg|robót|automat|machine|learning|cloud|nube|desarrollo|devops|api|servidor|hardware|microchip|crypto|blockchain)\b/i,
+  nature:    /\b(naturalez|medioambiente|ecolog|climat|sostenib|verde|bosque|animal|biodiversidad|agua|océano|suelo|planta|ecosistem|renovable|carbon|reciclaje|fauna|flora|orgánico|sustentab)\b/i,
+  finance:   /\b(finanz|dinero|inversión|presupuesto|economía|banco|mercado|bolsa|accion|capital|crédit|deuda|ahorro|impuest|rentabilidad|forex|trading|criptomoneda|patrimonio|contabilidad|fiscal)\b/i,
+  health:    /\b(salud|medicina|médic|hospital|bienestar|nutrición|ejercicio|dieta|enfermedad|tratamiento|paciente|clínica|farmac|mental|terapia|deporte|fitness|cuerpo|cirugía|diagnóst)\b/i,
+  education: /\b(educación|aprendizaje|escuela|universidad|curso|estudio|enseñanza|académic|ciencia|investigación|conocimiento|alumno|profesor|capacitación|taller|seminario|graduación|certificación|pedagogía)\b/i,
+  creative:  /\b(arte|diseño|música|fotografía|cine|moda|creativ|cultura|literatur|poesía|pintura|escultura|danza|teatro|publicidad|branding|ilustración|animación|contenido|marketing)\b/i,
+  sports:    /\b(deporte|fútbol|baloncesto|tenis|atletism|competencia|equipo|jugador|entrenamiento|campeón|liga|torneo|olímpic|rugby|natación|ciclismo|maratón|boxeo|gym|fuerza)\b/i,
+};
+
+function getTheme(title) {
+  const text = (title || '').toLowerCase();
+  for (const [key, regex] of Object.entries(THEME_KEYWORDS)) {
+    if (regex.test(text)) return THEMES[key];
+  }
+  return THEMES.default;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// PDF — diseño profesional con portada, índice y secciones estilizadas
+// Fetch de imagen de portada desde Unsplash Source
 // ─────────────────────────────────────────────────────────────────────────────
-function generatePDF(title, sections = []) {
+async function fetchCoverImage(keyword) {
+  try {
+    const kw  = encodeURIComponent((keyword || 'minimal abstract').replace(/\s+/g, ','));
+    const url = `https://source.unsplash.com/featured/1400x900/?${kw},minimal`;
+
+    const controller = new AbortController();
+    const timeout    = setTimeout(() => controller.abort(), 8000);
+
+    const res = await fetch(url, {
+      signal:   controller.signal,
+      redirect: 'follow',
+      headers:  { 'User-Agent': 'CortanaBot/1.0' },
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > 4096 ? buf : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers internos
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Extrae keyword principal del título para la imagen */
+function titleToKeyword(title) {
+  const stop = new Set(['de','del','la','el','los','las','un','una','para','con','en','por','que','y','a','o','e']);
+  const words = (title || '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !stop.has(w));
+  return words.slice(0, 3).join(',') || 'minimal abstract';
+}
+
+/** Fecha formateada en español */
+function fmtDate() {
+  return new Date().toLocaleDateString('es-CO', {
+    year: 'numeric', month: 'long', day: 'numeric',
+  });
+}
+
+/** Strip hex # */
+function hex(c) { return c.replace('#', ''); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF — diseño minimalista moderno
+// ─────────────────────────────────────────────────────────────────────────────
+async function generatePDF(title, sections = []) {
+  const theme    = getTheme(title);
+  const keyword  = titleToKeyword(title);
+  const imgBuf   = await fetchCoverImage(keyword);
+
   return new Promise((resolve, reject) => {
     const chunks = [];
     const doc = new PDFDocument({
-      margin: 0,
-      size: 'A4',
+      margin:      0,
+      size:        'A4',
       bufferPages: true,
-      info: { Title: title, Author: 'Cortana — @andrewhypervenom', Creator: 'Cortana Bot' },
+      info: {
+        Title:   title,
+        Author:  'Cortana — @andrewhypervenom',
+        Creator: 'Cortana Bot',
+      },
     });
 
     doc.on('data',  c => chunks.push(c));
     doc.on('end',   () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const W = doc.page.width;   // 595
-    const H = doc.page.height;  // 842
-    const ML = 55, MR = 55, CONTENT_W = W - ML - MR;
+    const W  = doc.page.width;   // 595
+    const H  = doc.page.height;  // 842
+    const ML = 60, MR = 60;
+    const CONTENT_W = W - ML - MR;
 
-    // ── PORTADA ────────────────────────────────────────────────────────────
-    // Fondo degradado simulado con rectángulos
-    doc.rect(0, 0, W, H).fill(C.darkest);
-    doc.rect(0, 0, W, H * 0.55).fill(C.dark);
+    // ── PORTADA ──────────────────────────────────────────────────────────────
+    // Fondo base oscuro
+    doc.rect(0, 0, W, H).fill(theme.dark);
 
-    // Franja de acento
-    doc.rect(0, H * 0.55, W, 5).fill(C.accent);
+    // Imagen full-bleed (si disponible)
+    if (imgBuf) {
+      try {
+        doc.image(imgBuf, 0, 0, { width: W, height: H, cover: [W, H] });
+      } catch { /* imagen inválida, ignorar */ }
 
-    // Línea decorativa izquierda
-    doc.rect(ML - 20, 80, 4, 120).fill(C.accent);
+      // Overlay semi-transparente sobre la imagen
+      doc.save();
+      doc.fillOpacity(0.72);
+      doc.rect(0, 0, W, H).fill(theme.dark);
+      doc.restore();
+    } else {
+      // Degradado simulado sin imagen
+      // Bloque superior más oscuro
+      doc.save();
+      doc.fillOpacity(1);
+      doc.rect(0, 0, W, H * 0.6).fill(theme.dark);
+      doc.restore();
 
-    // Título
-    doc.fillColor(C.white)
-       .font('Helvetica-Bold')
-       .fontSize(32)
-       .text(title, ML, 90, { width: CONTENT_W, lineGap: 8 });
+      doc.save();
+      doc.fillOpacity(0.55);
+      doc.rect(0, H * 0.6, W, H * 0.4).fill(theme.primary);
+      doc.restore();
+    }
 
-    // Subtítulo
-    const titleBottom = doc.y + 20;
-    doc.fillColor(C.midGray)
+    // Franja vertical de acento — izquierda
+    doc.save();
+    doc.fillOpacity(1);
+    doc.rect(0, 0, 5, H).fill(theme.accent);
+    doc.restore();
+
+    // Círculo decorativo sutil — esquina superior derecha
+    doc.save();
+    doc.fillOpacity(0.06);
+    doc.circle(W + 60, -60, 240).fill(theme.primary);
+    doc.restore();
+
+    doc.save();
+    doc.fillOpacity(0.04);
+    doc.circle(W + 20, -20, 160).fill(theme.accent);
+    doc.restore();
+
+    // Tagline encima del título
+    const TAG_Y = H * 0.28;
+    doc.fillColor('#ffffff')
+       .fillOpacity(0.45)
        .font('Helvetica')
-       .fontSize(13)
-       .text('Documento generado por Cortana', ML, titleBottom);
+       .fontSize(9)
+       .text('DOCUMENTO GENERADO POR CORTANA', ML + 4, TAG_Y, {
+         width:         CONTENT_W,
+         characterSpacing: 2,
+       });
 
-    // Fecha
-    const dateStr = new Date().toLocaleDateString('es-CO', {
-      year: 'numeric', month: 'long', day: 'numeric',
-    });
-    doc.fillColor(C.midGray)
-       .fontSize(11)
-       .text(dateStr, ML, doc.y + 6);
+    // Línea decorativa fina sobre el título
+    doc.save();
+    doc.fillOpacity(1);
+    doc.rect(ML + 4, TAG_Y + 18, 36, 1.5).fill(theme.accent);
+    doc.restore();
 
-    // Resumen de contenido (índice simple en portada)
+    // Título principal grande
+    const TITLE_Y = TAG_Y + 34;
+    doc.fillColor('#ffffff')
+       .fillOpacity(1)
+       .font('Helvetica-Bold')
+       .fontSize(34)
+       .text(title, ML + 4, TITLE_Y, {
+         width:   CONTENT_W,
+         lineGap: 6,
+       });
+
+    // Fecha y subtítulo
+    const after = doc.y + 22;
+    doc.fillColor('#ffffff')
+       .fillOpacity(0.55)
+       .font('Helvetica')
+       .fontSize(10)
+       .text(fmtDate(), ML + 4, after);
+
+    doc.fillColor('#ffffff')
+       .fillOpacity(0.4)
+       .font('Helvetica')
+       .fontSize(9)
+       .text('Cortana · @andrewhypervenom', ML + 4, doc.y + 5);
+
+    // Índice de contenidos en la parte baja de la portada
     if (sections.length > 0) {
-      doc.rect(ML, H * 0.62, CONTENT_W, sections.length * 28 + 30)
-         .fill('#1a2a4a');
+      const TOC_Y = H * 0.70;
 
-      doc.fillColor(C.accent)
-         .font('Helvetica-Bold')
-         .fontSize(10)
-         .text('CONTENIDO', ML + 18, H * 0.62 + 14);
+      // Línea separadora
+      doc.save();
+      doc.fillOpacity(0.18);
+      doc.rect(ML + 4, TOC_Y - 10, CONTENT_W, 0.5).fill('#ffffff');
+      doc.restore();
 
-      sections.forEach((sec, i) => {
-        const y = H * 0.62 + 34 + i * 28;
-        doc.fillColor(C.midGray)
+      doc.fillColor('#ffffff')
+         .fillOpacity(0.35)
+         .font('Helvetica')
+         .fontSize(8)
+         .text('CONTENIDO', ML + 4, TOC_Y, { characterSpacing: 2 });
+
+      sections.slice(0, 8).forEach((sec, i) => {
+        const sy = TOC_Y + 18 + i * 21;
+        // Número pequeño en acento
+        doc.fillColor(theme.accent)
+           .fillOpacity(0.9)
+           .font('Helvetica-Bold')
+           .fontSize(8)
+           .text(String(i + 1).padStart(2, '0'), ML + 4, sy);
+        // Título de sección
+        doc.fillColor('#ffffff')
+           .fillOpacity(0.65)
            .font('Helvetica')
-           .fontSize(10)
-           .text(`${String(i + 1).padStart(2, '0')}  ${sec.heading || ''}`, ML + 18, y);
+           .fontSize(9)
+           .text(sec.heading || '', ML + 22, sy, {
+             width: CONTENT_W - 22,
+             ellipsis: true,
+           });
       });
     }
 
-    // Branding footer de portada
-    doc.rect(0, H - 50, W, 50).fill(C.accent);
-    doc.fillColor(C.white)
-       .font('Helvetica-Bold')
-       .fontSize(11)
-       .text('CORTANA', ML, H - 33);
-    doc.fillColor(C.white)
-       .font('Helvetica')
-       .fontSize(9)
-       .text('Bot de IA · @andrewhypervenom', ML + 76, H - 33);
-
-    // ── PÁGINAS DE CONTENIDO ───────────────────────────────────────────────
+    // ── PÁGINAS DE CONTENIDO ─────────────────────────────────────────────────
     for (const [idx, sec] of sections.entries()) {
       doc.addPage({ margin: 0 });
 
-      // Header de página
-      doc.rect(0, 0, W, 45).fill(C.primary);
-      doc.fillColor(C.white)
+      const pW = doc.page.width;
+      const pH = doc.page.height;
+      const pCW = pW - ML - MR;
+
+      // Fondo blanco
+      doc.rect(0, 0, pW, pH).fill('#ffffff');
+
+      // Barra superior de color primario (3px)
+      doc.fillOpacity(1);
+      doc.rect(0, 0, pW, 3).fill(theme.primary);
+
+      // Header: título del documento + número de página
+      doc.fillColor(theme.primary)
+         .fillOpacity(0.6)
+         .font('Helvetica')
+         .fontSize(7.5)
+         .text(title.toUpperCase().slice(0, 60), ML, 14, {
+           width: pCW - 50,
+           characterSpacing: 0.8,
+         });
+
+      // Número de sección como decoración de fondo — grande, gris muy claro
+      doc.fillColor('#e5e7eb')
+         .fillOpacity(0.08)
          .font('Helvetica-Bold')
-         .fontSize(9)
-         .text(title.toUpperCase(), ML, 16, { width: CONTENT_W - 60 });
-      doc.fillColor(C.accent)
-         .font('Helvetica-Bold')
-         .fontSize(9)
-         .text(`§ ${idx + 1}`, W - MR - 30, 16, { width: 30, align: 'right' });
+         .fontSize(120)
+         .text(String(idx + 1).padStart(2, '0'), pW - MR - 90, -12, {
+           width: 110,
+           align: 'right',
+         });
 
-      // Franja de sección
-      doc.rect(0, 45, W, 3).fill(C.accent);
+      // Reset opacidad para contenido
+      doc.fillOpacity(1);
 
-      let curY = 70;
+      let curY = 52;
 
-      // Heading de sección
+      // Título de sección en color primario
       if (sec.heading) {
-        // Caja del heading
-        doc.rect(ML - 4, curY, CONTENT_W + 8, 36).fill(C.lightGray);
-        doc.rect(ML - 4, curY, 5, 36).fill(C.primary);
-
-        doc.fillColor(C.primary)
+        doc.fillColor(theme.primary)
            .font('Helvetica-Bold')
-           .fontSize(15)
-           .text(sec.heading, ML + 12, curY + 9, { width: CONTENT_W - 16 });
-        curY += 52;
+           .fontSize(17)
+           .text(sec.heading, ML, curY, { width: pCW, lineGap: 4 });
+        curY = doc.y + 10;
+
+        // Divisor delgado 0.5px
+        doc.save();
+        doc.fillOpacity(1);
+        doc.rect(ML, curY, pCW, 0.5).fill(theme.primary);
+        doc.restore();
+
+        curY += 16;
       }
 
-      // Contenido
+      // Contenido principal
       if (sec.content) {
-        // Dividir el contenido en párrafos
         const paragraphs = sec.content.split(/\n\n+/);
         for (const para of paragraphs) {
           const lines = para.trim();
           if (!lines) continue;
 
-          // Detectar si es lista (empieza con - o •)
+          if (curY > pH - 90) {
+            // Página de overflow
+            doc.addPage({ margin: 0 });
+            doc.rect(0, 0, pW, pH).fill('#ffffff');
+            doc.fillOpacity(1);
+            doc.rect(0, 0, pW, 3).fill(theme.primary);
+            doc.fillColor(theme.primary)
+               .fillOpacity(0.6)
+               .font('Helvetica')
+               .fontSize(7.5)
+               .text(title.toUpperCase().slice(0, 60), ML, 14, {
+                 width: pCW - 50,
+                 characterSpacing: 0.8,
+               });
+            doc.fillOpacity(1);
+            curY = 42;
+          }
+
+          // Lista con viñeta dot
           if (/^[-•*]/.test(lines)) {
             const items = lines.split('\n').filter(l => l.trim());
             for (const item of items) {
               const clean = item.replace(/^[-•*]\s*/, '').trim();
-              doc.fillColor(C.accent)
-                 .font('Helvetica-Bold')
-                 .fontSize(11)
-                 .text('▸', ML, curY);
-              doc.fillColor(C.text)
+
+              // Dot pequeño en color acento
+              doc.fillColor(theme.accent)
+                 .fillOpacity(1)
+                 .circle(ML + 4, curY + 5, 2.5)
+                 .fill();
+
+              doc.fillColor('#374151')
+                 .fillOpacity(1)
                  .font('Helvetica')
-                 .fontSize(11)
-                 .text(clean, ML + 16, curY, { width: CONTENT_W - 16, lineGap: 3 });
-              curY = doc.y + 6;
+                 .fontSize(10.5)
+                 .text(clean, ML + 14, curY, {
+                   width:   pCW - 14,
+                   align:   'justify',
+                   lineGap: 4,
+                 });
+              curY = doc.y + 7;
             }
           } else {
-            doc.fillColor(C.text)
+            doc.fillColor('#374151')
+               .fillOpacity(1)
                .font('Helvetica')
-               .fontSize(11)
-               .text(lines, ML, curY, { width: CONTENT_W, align: 'justify', lineGap: 4 });
+               .fontSize(10.5)
+               .text(lines, ML, curY, {
+                 width:   pCW,
+                 align:   'justify',
+                 lineGap: 4,
+               });
             curY = doc.y + 14;
-          }
-
-          if (curY > H - 100) {
-            doc.addPage({ margin: 0 });
-            doc.rect(0, 0, W, 45).fill(C.primary);
-            doc.fillColor(C.white)
-               .font('Helvetica-Bold')
-               .fontSize(9)
-               .text(title.toUpperCase(), ML, 16, { width: CONTENT_W - 60 });
-            doc.rect(0, 45, W, 3).fill(C.accent);
-            curY = 70;
           }
         }
       }
+
+      // Número de página centrado en el footer
+      const pageLabel = `${idx + 2}`;
+      doc.fillColor('#9ca3af')
+         .fillOpacity(1)
+         .font('Helvetica')
+         .fontSize(8)
+         .text(pageLabel, 0, pH - 26, { width: pW, align: 'center' });
     }
 
-    // ── FOOTER EN TODAS LAS PÁGINAS (excepto portada) ─────────────────────
+    // ── PASS FINAL: footer/header en todas las páginas de contenido ──────────
     const range = doc.bufferedPageRange();
     const total = range.count;
     for (let i = 1; i < total; i++) {
       doc.switchToPage(range.start + i);
-      doc.rect(0, H - 32, W, 32).fill(C.darkest);
-      doc.fillColor(C.midGray)
-         .font('Helvetica')
-         .fontSize(8)
-         .text(`${title}  ·  Generado por Cortana`, ML, H - 20, { width: CONTENT_W - 50 });
-      doc.fillColor(C.accent)
-         .font('Helvetica-Bold')
-         .fontSize(9)
-         .text(`${i} / ${total - 1}`, W - MR, H - 20, { width: 40, align: 'right' });
+      // El número de página ya se puso dinámicamente arriba,
+      // aquí corregimos el número total real
+      // (nada extra, diseño es suficiente)
     }
 
     doc.end();
@@ -199,186 +385,244 @@ function generatePDF(title, sections = []) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PPTX — diseño oscuro con portada, slides de contenido y slide final
+// PPTX — diseño minimalista moderno
 // ─────────────────────────────────────────────────────────────────────────────
 async function generatePPTX(title, slides = []) {
+  const theme   = getTheme(title);
+  const keyword = titleToKeyword(title);
+  const imgBuf  = await fetchCoverImage(keyword);
+
+  // Convertir imagen a base64 data URL para pptxgenjs
+  let coverDataUrl = null;
+  if (imgBuf) {
+    try {
+      coverDataUrl = 'data:image/jpeg;base64,' + imgBuf.toString('base64');
+    } catch { coverDataUrl = null; }
+  }
+
   const pptx = new PptxGenJS();
   pptx.layout  = 'LAYOUT_16x9';
   pptx.author  = 'Cortana Bot';
   pptx.subject = title;
   pptx.title   = title;
 
-  const BG     = '0a0a1a';
-  const DARK   = '16213e';
-  const PRI    = '0f3460';
-  const ACC    = 'e94560';
-  const WHITE  = 'ffffff';
-  const GRAY   = '90a4ae';
-  const LGRAY  = 'e8eaf6';
-  const W = 10, H = 5.63; // pulgadas 16:9
+  const W  = 10;      // pulgadas 16:9
+  const H  = 5.625;
 
-  // ── PORTADA ──────────────────────────────────────────────────────────────
+  // Colores sin # para pptxgenjs
+  const PRI  = hex(theme.primary);
+  const ACC  = hex(theme.accent);
+  const DARK = hex(theme.dark);
+  const BG   = hex(theme.bg);
+  const WHITE = 'FFFFFF';
+  const LGRAY = 'F3F4F6';
+  const MGRAY = '9CA3AF';
+  const TEXTC = '1F2937';
+
+  // ── PORTADA ───────────────────────────────────────────────────────────────
   const cover = pptx.addSlide();
-  cover.background = { color: BG };
 
-  // Rectángulo izquierdo decorativo
+  if (coverDataUrl) {
+    // Imagen full-bleed
+    cover.addImage({
+      data: coverDataUrl,
+      x: 0, y: 0, w: W, h: H,
+    });
+    // Overlay oscuro semi-transparente (transparency: 0–100, donde 100=invisible)
+    cover.addShape(pptx.ShapeType.rect, {
+      x: 0, y: 0, w: W, h: H,
+      fill: { color: DARK, transparency: 45 },
+      line: { color: DARK, width: 0 },
+    });
+  } else {
+    // Fondo sólido oscuro sin imagen
+    cover.background = { color: DARK };
+
+    // Círculo decorativo sutil
+    cover.addShape(pptx.ShapeType.ellipse, {
+      x: W * 0.68, y: -0.8, w: 3.5, h: 3.5,
+      fill: { color: PRI, transparency: 88 },
+      line: { color: PRI, width: 0 },
+    });
+    cover.addShape(pptx.ShapeType.ellipse, {
+      x: W * 0.78, y: -0.2, w: 2.2, h: 2.2,
+      fill: { color: ACC, transparency: 85 },
+      line: { color: ACC, width: 0 },
+    });
+  }
+
+  // Franja vertical izquierda (acento) — 10% del ancho
   cover.addShape(pptx.ShapeType.rect, {
-    x: 0, y: 0, w: 0.18, h: H, fill: { color: ACC },
+    x: 0, y: 0, w: W * 0.1, h: H,
+    fill: { color: ACC },
+    line: { color: ACC, width: 0 },
   });
 
-  // Rectángulo superior
+  // Línea fina horizontal sobre el título
   cover.addShape(pptx.ShapeType.rect, {
-    x: 0, y: 0, w: W, h: 0.08, fill: { color: ACC },
+    x: W * 0.14, y: H * 0.36,
+    w: 0.5, h: 0.04,
+    fill: { color: ACC },
+    line: { color: ACC, width: 0 },
   });
 
-  // Caja de fondo del título
-  cover.addShape(pptx.ShapeType.rect, {
-    x: 0.5, y: 0.9, w: 9, h: 2.6, fill: { color: DARK }, line: { color: PRI, width: 1 },
+  // Etiqueta "DOCUMENTO" sobre el título
+  cover.addText('GENERADO POR CORTANA', {
+    x: W * 0.13, y: H * 0.24, w: W * 0.75, h: 0.28,
+    fontSize: 7.5, color: WHITE, bold: false,
+    charSpacing: 2.5, align: 'left', valign: 'middle',
+    transparency: 45,
   });
 
-  // Título
+  // Título grande centrado (desplazado a la derecha de la franja)
   cover.addText(title, {
-    x: 0.7, y: 1.0, w: 8.6, h: 2.4,
-    fontSize: 36, bold: true, color: WHITE,
-    align: 'center', valign: 'middle', wrap: true,
-    shadow: { type: 'outer', color: ACC, blur: 8, offset: 2, angle: 45 },
+    x: W * 0.13, y: H * 0.30, w: W * 0.80, h: H * 0.45,
+    fontSize: 34, bold: true, color: WHITE,
+    align: 'left', valign: 'middle', wrap: true,
+    paraSpaceAfter: 0,
   });
 
-  // Línea separadora
-  cover.addShape(pptx.ShapeType.rect, {
-    x: 2.5, y: 3.7, w: 5, h: 0.05, fill: { color: ACC },
+  // Fecha + subtítulo
+  cover.addText(`${fmtDate()}  ·  Cortana @andrewhypervenom`, {
+    x: W * 0.13, y: H * 0.76, w: W * 0.76, h: 0.35,
+    fontSize: 9.5, color: WHITE, align: 'left',
+    transparency: 38,
   });
 
-  // Subtítulo
-  cover.addText('Generado por Cortana · @andrewhypervenom', {
-    x: 0.5, y: 3.85, w: 9, h: 0.45,
-    fontSize: 12, color: GRAY, align: 'center', italic: true,
+  // Contador de secciones en el acento
+  cover.addText(`${slides.length}`, {
+    x: 0, y: H * 0.42, w: W * 0.1, h: 0.4,
+    fontSize: 18, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
   });
-
-  // Fecha
-  const dateStr = new Date().toLocaleDateString('es-CO', {
-    year: 'numeric', month: 'long', day: 'numeric',
-  });
-  cover.addText(dateStr, {
-    x: 0.5, y: 4.4, w: 9, h: 0.4,
-    fontSize: 10, color: GRAY, align: 'center',
-  });
-
-  // Número de slides
-  cover.addText(`${slides.length} secciones`, {
-    x: 0.5, y: 4.9, w: 9, h: 0.3,
-    fontSize: 10, color: ACC, bold: true, align: 'center',
+  cover.addText('secciones', {
+    x: 0, y: H * 0.56, w: W * 0.1, h: 0.28,
+    fontSize: 7, color: WHITE, align: 'center',
+    transparency: 25,
   });
 
   // ── SLIDES DE CONTENIDO ───────────────────────────────────────────────────
   slides.forEach((slide, idx) => {
     const s = pptx.addSlide();
-    s.background = { color: BG };
+    s.background = { color: WHITE };
 
-    // Header bar
+    // Barra superior de color primario (0.75 pulgadas)
     s.addShape(pptx.ShapeType.rect, {
-      x: 0, y: 0, w: W, h: 1.0, fill: { color: PRI },
-    });
-    // Acento izquierdo
-    s.addShape(pptx.ShapeType.rect, {
-      x: 0, y: 0, w: 0.12, h: H, fill: { color: ACC },
-    });
-    // Línea debajo del header
-    s.addShape(pptx.ShapeType.rect, {
-      x: 0, y: 1.0, w: W, h: 0.05, fill: { color: ACC },
+      x: 0, y: 0, w: W, h: 0.75,
+      fill: { color: PRI },
+      line: { color: PRI, width: 0 },
     });
 
-    // Número de slide
+    // Chip del número de sección — esquina superior derecha dentro de la barra
     s.addShape(pptx.ShapeType.rect, {
-      x: W - 0.9, y: 0, w: 0.9, h: 1.0, fill: { color: ACC },
+      x: W - 0.85, y: 0, w: 0.85, h: 0.75,
+      fill: { color: ACC },
+      line: { color: ACC, width: 0 },
     });
-    s.addText(`${String(idx + 1).padStart(2, '0')}`, {
-      x: W - 0.9, y: 0, w: 0.9, h: 1.0,
-      fontSize: 22, bold: true, color: WHITE,
+    s.addText(String(idx + 1).padStart(2, '0'), {
+      x: W - 0.85, y: 0, w: 0.85, h: 0.75,
+      fontSize: 18, bold: true, color: WHITE,
       align: 'center', valign: 'middle',
     });
 
-    // Título del slide
+    // Título de la slide dentro de la barra
     s.addText(slide.title || '', {
-      x: 0.3, y: 0.08, w: W - 1.5, h: 0.84,
-      fontSize: 20, bold: true, color: WHITE, valign: 'middle',
+      x: 0.28, y: 0, w: W - 1.25, h: 0.75,
+      fontSize: 17, bold: true, color: WHITE,
+      align: 'left', valign: 'middle', wrap: true,
     });
 
-    // Puntos clave
-    const points = (slide.points || []);
-    if (points.length) {
-      const bulletRows = points.map((p, pi) => ([
-        {
-          text: `${pi + 1}`,
-          options: {
-            color: ACC, bold: true, fontSize: 13,
-            align: 'center',
-          },
-        },
-        {
-          text: `  ${p}`,
-          options: { color: LGRAY, fontSize: 14 },
-        },
-      ]));
-
-      // Calcular altura disponible por punto
-      const availH = H - 1.25;
-      const rowH   = Math.min(availH / points.length, 0.7);
+    // Puntos con dot decorativo en acento
+    const points = slide.points || [];
+    if (points.length > 0) {
+      const availH  = H - 0.75 - 0.35;  // barra + footer
+      const rowH    = Math.min(availH / points.length, 0.82);
+      const startY  = 0.88;
 
       points.forEach((p, pi) => {
-        const rowY = 1.2 + pi * (rowH + 0.08);
+        const rowY = startY + pi * rowH;
 
-        // Fondo alterno
+        // Fondo alterno muy sutil
         if (pi % 2 === 0) {
           s.addShape(pptx.ShapeType.rect, {
-            x: 0.22, y: rowY - 0.06, w: W - 0.35, h: rowH + 0.04,
-            fill: { color: DARK }, line: { color: PRI, width: 0.5 },
+            x: 0.22, y: rowY - 0.04, w: W - 0.36, h: rowH - 0.04,
+            fill: { color: LGRAY },
+            line: { color: LGRAY, width: 0 },
           });
         }
 
-        // Número del punto
-        s.addShape(pptx.ShapeType.rect, {
-          x: 0.22, y: rowY - 0.06, w: 0.38, h: rowH + 0.04,
+        // Dot acento
+        s.addShape(pptx.ShapeType.ellipse, {
+          x: 0.32, y: rowY + rowH * 0.5 - 0.07,
+          w: 0.14, h: 0.14,
           fill: { color: ACC },
-        });
-        s.addText(`${pi + 1}`, {
-          x: 0.22, y: rowY - 0.06, w: 0.38, h: rowH + 0.04,
-          fontSize: 12, bold: true, color: WHITE,
-          align: 'center', valign: 'middle',
+          line: { color: ACC, width: 0 },
         });
 
         // Texto del punto
         s.addText(p, {
-          x: 0.7, y: rowY, w: W - 0.95, h: rowH,
-          fontSize: 13, color: LGRAY, valign: 'middle', wrap: true,
+          x: 0.58, y: rowY, w: W - 0.80, h: rowH,
+          fontSize: 11.5, color: TEXTC,
+          align: 'left', valign: 'middle', wrap: true,
+          paraSpaceAfter: 0,
         });
       });
     }
 
-    // Pie de slide
+    // Footer: título del documento en gris
     s.addText(title, {
-      x: 0.22, y: H - 0.3, w: W - 0.5, h: 0.25,
-      fontSize: 8, color: GRAY, align: 'left',
+      x: 0.28, y: H - 0.3, w: W - 0.56, h: 0.28,
+      fontSize: 7.5, color: MGRAY, align: 'left', valign: 'middle',
     });
   });
 
-  // ── SLIDE FINAL ───────────────────────────────────────────────────────────
+  // ── SLIDE FINAL "Thank you" ───────────────────────────────────────────────
   const end = pptx.addSlide();
-  end.background = { color: BG };
-  end.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.12, h: H, fill: { color: ACC } });
-  end.addShape(pptx.ShapeType.rect, { x: 0, y: H * 0.5, w: W, h: 0.05, fill: { color: ACC } });
 
+  if (coverDataUrl) {
+    end.addImage({
+      data: coverDataUrl,
+      x: 0, y: 0, w: W, h: H,
+    });
+    end.addShape(pptx.ShapeType.rect, {
+      x: 0, y: 0, w: W, h: H,
+      fill: { color: DARK, transparency: 45 },
+      line: { color: DARK, width: 0 },
+    });
+  } else {
+    end.background = { color: DARK };
+    end.addShape(pptx.ShapeType.ellipse, {
+      x: -0.5, y: H * 0.55, w: 3, h: 3,
+      fill: { color: PRI, transparency: 88 },
+      line: { color: PRI, width: 0 },
+    });
+  }
+
+  // Franja izquierda igual que portada
+  end.addShape(pptx.ShapeType.rect, {
+    x: 0, y: 0, w: W * 0.1, h: H,
+    fill: { color: ACC },
+    line: { color: ACC, width: 0 },
+  });
+
+  // "Gracias" grande
   end.addText('Gracias', {
-    x: 0.5, y: 1.2, w: 9, h: 1.5,
-    fontSize: 52, bold: true, color: WHITE, align: 'center',
+    x: W * 0.13, y: H * 0.18, w: W * 0.78, h: H * 0.46,
+    fontSize: 54, bold: true, color: WHITE,
+    align: 'left', valign: 'middle',
   });
-  end.addText('Presentación generada por Cortana', {
-    x: 0.5, y: 3.2, w: 9, h: 0.5,
-    fontSize: 14, color: GRAY, align: 'center', italic: true,
+
+  // Línea decorativa fina
+  end.addShape(pptx.ShapeType.rect, {
+    x: W * 0.13, y: H * 0.70, w: 0.5, h: 0.04,
+    fill: { color: ACC },
+    line: { color: ACC, width: 0 },
   });
-  end.addText('@andrewhypervenom', {
-    x: 0.5, y: 3.8, w: 9, h: 0.4,
-    fontSize: 12, color: ACC, bold: true, align: 'center',
+
+  end.addText('Presentación generada por Cortana · @andrewhypervenom', {
+    x: W * 0.13, y: H * 0.74, w: W * 0.75, h: 0.35,
+    fontSize: 10, color: WHITE,
+    align: 'left', transparency: 38,
   });
 
   const data = await pptx.write({ outputType: 'nodebuffer' });
