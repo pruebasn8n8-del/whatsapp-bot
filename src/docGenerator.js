@@ -247,6 +247,18 @@ function fmtDate() {
 
 function hex(c) { return (c || '').replace('#', ''); }
 
+// ── Emoji stripper para PDF (Helvetica no soporta emojis) ────────────────────
+// PPTX no usa esto — PowerPoint renderiza emojis con fuentes del sistema
+function _stripEmoji(str) {
+  return (str || '')
+    .replace(/\p{Emoji_Presentation}/gu, '')
+    .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
+    .replace(/\uFE0F/g, '')
+    .replace(/\u200D/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 // ── Bold segment splitter ────────────────────────────────────────────────────
 /**
  * Divide un string en segmentos {text, bold} según **texto**.
@@ -265,6 +277,58 @@ function splitBoldSegments(line) {
   return segments.length > 0 ? segments : [{ text: line, bold: false }];
 }
 
+/**
+ * Divide un string en segmentos {text, code, bold} según `code` y **bold**.
+ * Prioridad: code > bold.
+ */
+function splitInlineSegments(line) {
+  const segments = [];
+  // Tokeniza por `code` y **bold**
+  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let last = 0, m;
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > last) segments.push({ text: line.slice(last, m.index), bold: false, code: false });
+    const tok = m[0];
+    if (tok.startsWith('`')) {
+      segments.push({ text: tok.slice(1, -1), bold: false, code: true });
+    } else {
+      segments.push({ text: tok.slice(2, -2), bold: true, code: false });
+    }
+    last = m.index + tok.length;
+  }
+  if (last < line.length) segments.push({ text: line.slice(last), bold: false, code: false });
+  return segments.length > 0 ? segments : [{ text: line, bold: false, code: false }];
+}
+
+// ── PDF Code Block Renderer ──────────────────────────────────────────────────
+function _pdfCodeBlock(doc, codeText, x, w, y, maxY, theme) {
+  if (!codeText || y + 20 > maxY) return y;
+  const PAD = 10, BORDER = 3;
+  const lines = codeText.split('\n');
+  const lineH = 13;
+  const totalH = PAD * 2 + lines.length * lineH + 4;
+
+  if (y + totalH > maxY) return y;
+
+  // Fondo gris claro
+  doc.save().fillOpacity(1).rect(x, y, w, totalH).fill('#F1F5F9').restore();
+  // Borde izquierdo accent
+  doc.fillOpacity(1).rect(x, y, BORDER, totalH).fill(theme.accent);
+  // Borde exterior sutil
+  doc.save().strokeColor('#CBD5E1').strokeOpacity(0.6).lineWidth(0.5)
+     .rect(x, y, w, totalH).stroke().restore();
+
+  // Texto en Courier
+  lines.forEach((codeLine, li) => {
+    const ly = y + PAD + li * lineH;
+    if (ly >= maxY - lineH) return;
+    doc.fillColor('#1E293B').fillOpacity(1).font('Courier').fontSize(8.5)
+       .text(codeLine || ' ', x + BORDER + PAD, ly, { width: w - BORDER - PAD * 2, lineBreak: false });
+  });
+
+  return y + totalH + 8;
+}
+
 // ── PDF rich content renderer (reemplaza _pdfText) ──────────────────────────
 /**
  * Renderiza sección completa: content con jerarquía tipográfica + tabla + flowchart + curiosity.
@@ -272,118 +336,171 @@ function splitBoldSegments(line) {
  */
 function _pdfRichContent(doc, section, x, w, startY, maxY, theme) {
   let curY = startY;
-  const content = (section.content || '').trim();
+  // Aplicar strip de emojis al contenido completo antes de procesar
+  const content = _stripEmoji(section.content || '').trim();
 
-  // Procesar línea por línea
-  const lines = content.split('\n');
-  let pi = 0;
-  while (pi < lines.length) {
+  // Pre-procesar: separar bloques de código ``` ``` del texto normal
+  // Resultado: array de { type: 'text'|'code', value: string }
+  const segments = [];
+  const codeBlockRe = /```(?:\w+)?\n?([\s\S]*?)```/g;
+  let lastIdx = 0, cm;
+  while ((cm = codeBlockRe.exec(content)) !== null) {
+    if (cm.index > lastIdx) segments.push({ type: 'text', value: content.slice(lastIdx, cm.index) });
+    segments.push({ type: 'code', value: cm[1].trimEnd() });
+    lastIdx = cm.index + cm[0].length;
+  }
+  if (lastIdx < content.length) segments.push({ type: 'text', value: content.slice(lastIdx) });
+
+  for (const seg of segments) {
     if (curY >= maxY - 20) break;
-    const raw = lines[pi];
-    const line = raw.trimEnd();
-    pi++;
 
-    if (!line.trim()) {
+    if (seg.type === 'code') {
       curY = Math.min(curY + 6, maxY);
+      curY = _pdfCodeBlock(doc, seg.value, x, w, curY, maxY, theme);
       continue;
     }
 
-    // ## Subtítulo H2
-    const h2 = line.match(/^##\s+(.+)/);
-    if (h2) {
-      if (curY + 30 > maxY) break;
-      curY = Math.min(curY + 6, maxY);
-      doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(13)
-         .text(h2[1], x, curY, { width: w, lineGap: 2 });
-      curY = doc.y + 2;
-      // Subrayado accent
-      if (curY + 3 <= maxY) {
-        doc.fillOpacity(1).rect(x, curY, 32, 2).fill(theme.accent);
-        curY += 7;
+    // Procesar texto línea por línea
+    const lines = seg.value.split('\n');
+    let pi = 0;
+    while (pi < lines.length) {
+      if (curY >= maxY - 20) break;
+      const raw = lines[pi];
+      const line = raw.trimEnd();
+      pi++;
+
+      if (!line.trim()) {
+        curY = Math.min(curY + 6, maxY);
+        continue;
       }
-      continue;
-    }
 
-    // ### Sub-subtítulo H3
-    const h3 = line.match(/^###\s+(.+)/);
-    if (h3) {
-      if (curY + 22 > maxY) break;
-      curY = Math.min(curY + 4, maxY);
-      doc.fillColor(theme.primary).fillOpacity(1).font('Helvetica-Bold').fontSize(11.5)
-         .text(h3[1], x, curY, { width: w, lineGap: 2 });
-      curY = doc.y + 6;
-      continue;
-    }
+      // Separador horizontal ---
+      if (/^-{3,}$/.test(line.trim())) {
+        if (curY + 8 > maxY) break;
+        doc.save().strokeColor(theme.primary).strokeOpacity(0.25).lineWidth(0.7)
+           .moveTo(x, curY + 4).lineTo(x + w, curY + 4).stroke().restore();
+        curY += 10;
+        continue;
+      }
 
-    // 1. Lista numerada
-    const num = line.match(/^(\d+)\.\s+(.+)/);
-    if (num) {
-      if (curY + 20 > maxY) break;
-      const numStr = num[1] + '.';
-      const numW = 20;
-      doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(10.5)
-         .text(numStr, x, curY, { width: numW, lineBreak: false });
-      doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
-         .text(num[2], x + numW + 2, curY, { width: w - numW - 2, lineGap: 3 });
-      curY = Math.min(doc.y + 4, maxY);
-      continue;
-    }
+      // ## Subtítulo H2
+      const h2 = line.match(/^##\s+(.+)/);
+      if (h2) {
+        if (curY + 30 > maxY) break;
+        curY = Math.min(curY + 6, maxY);
+        doc.fillColor(theme.dark).fillOpacity(1).font('Helvetica-Bold').fontSize(13)
+           .text(_stripEmoji(h2[1]), x, curY, { width: w, lineGap: 2 });
+        curY = doc.y + 2;
+        if (curY + 3 <= maxY) {
+          doc.fillOpacity(1).rect(x, curY, 32, 2).fill(theme.accent);
+          curY += 7;
+        }
+        continue;
+      }
 
-    // Sub-bullet anidado (2 espacios + -)
-    const subBullet = line.match(/^ {2,}[-•*]\s+(.+)/);
-    if (subBullet) {
-      if (curY + 18 > maxY) break;
-      const ix = x + 18;
-      doc.fillColor('#9CA3AF').fillOpacity(1).circle(ix - 6, curY + 5, 2).fill();
-      doc.fillColor('#6B7280').fillOpacity(1).font('Helvetica').fontSize(9.5)
-         .text(subBullet[1], ix, curY, { width: w - 20, lineGap: 2 });
-      curY = Math.min(doc.y + 3, maxY);
-      continue;
-    }
+      // ### Sub-subtítulo H3
+      const h3 = line.match(/^###\s+(.+)/);
+      if (h3) {
+        if (curY + 22 > maxY) break;
+        curY = Math.min(curY + 4, maxY);
+        doc.fillColor(theme.primary).fillOpacity(1).font('Helvetica-Bold').fontSize(11.5)
+           .text(_stripEmoji(h3[1]), x, curY, { width: w, lineGap: 2 });
+        curY = doc.y + 6;
+        continue;
+      }
 
-    // Bullet principal
-    const bullet = line.match(/^[-•*]\s+(.+)/);
-    if (bullet) {
-      if (curY + 20 > maxY) break;
-      doc.fillColor(theme.accent).fillOpacity(1).circle(x - 5, curY + 5.5, 2.5).fill();
-      doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10)
-         .text(bullet[1], x, curY, { width: w, lineGap: 3 });
-      curY = Math.min(doc.y + 4, maxY);
-      continue;
-    }
+      // > Blockquote
+      const bq = line.match(/^>\s+(.+)/);
+      if (bq) {
+        if (curY + 22 > maxY) break;
+        doc.save().fillOpacity(0.08).rect(x, curY - 2, w, 20).fill(theme.primary).restore();
+        doc.fillOpacity(1).rect(x, curY - 2, 3, 20).fill(theme.primary);
+        doc.fillColor(theme.dark).fillOpacity(0.80).font('Helvetica').fontSize(10)
+           .text(_stripEmoji(bq[1]), x + 10, curY, { width: w - 12, lineGap: 2, italics: false });
+        curY = Math.min(doc.y + 8, maxY);
+        continue;
+      }
 
-    // Línea completamente en negrita **texto**
-    if (/^\*\*.+\*\*$/.test(line.trim())) {
-      if (curY + 18 > maxY) break;
-      const clean = line.trim().replace(/^\*\*|\*\*$/g, '');
-      doc.fillColor('#1F2937').fillOpacity(1).font('Helvetica-Bold').fontSize(10.5)
-         .text(clean, x, curY, { width: w, lineGap: 3 });
-      curY = Math.min(doc.y + 6, maxY);
-      continue;
-    }
+      // 1. Lista numerada
+      const num = line.match(/^(\d+)\.\s+(.+)/);
+      if (num) {
+        if (curY + 20 > maxY) break;
+        const numStr = num[1] + '.';
+        const numW = 20;
+        doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(10.5)
+           .text(numStr, x, curY, { width: numW, lineBreak: false });
+        doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
+           .text(_stripEmoji(num[2]), x + numW + 2, curY, { width: w - numW - 2, lineGap: 3 });
+        curY = Math.min(doc.y + 4, maxY);
+        continue;
+      }
 
-    // Párrafo normal (puede tener negrita inline)
-    if (curY + 14 > maxY) break;
-    const segs = splitBoldSegments(line);
-    const hasBold = segs.some(s => s.bold);
-    if (hasBold) {
-      segs.forEach((seg, i) => {
-        const isLast = i === segs.length - 1;
-        if (!seg.text) return;
-        doc.fillColor('#374151').fillOpacity(1)
-           .font(seg.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10.5)
-           .text(seg.text, i === 0 ? x : undefined, i === 0 ? curY : undefined, {
-             continued: !isLast,
-             width: w,
-             lineGap: 4,
-             align: 'justify',
-           });
-      });
-      curY = Math.min(doc.y + 8, maxY);
-    } else {
-      doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
-         .text(line, x, curY, { width: w, align: 'justify', lineGap: 4 });
-      curY = Math.min(doc.y + 8, maxY);
+      // Sub-bullet anidado (2+ espacios + -)
+      const subBullet = line.match(/^ {2,}[-•*]\s+(.+)/);
+      if (subBullet) {
+        if (curY + 18 > maxY) break;
+        const ix = x + 18;
+        doc.fillColor('#9CA3AF').fillOpacity(1).circle(ix - 6, curY + 5, 2).fill();
+        doc.fillColor('#6B7280').fillOpacity(1).font('Helvetica').fontSize(9.5)
+           .text(_stripEmoji(subBullet[1]), ix, curY, { width: w - 20, lineGap: 2 });
+        curY = Math.min(doc.y + 3, maxY);
+        continue;
+      }
+
+      // Bullet principal
+      const bullet = line.match(/^[-•*]\s+(.+)/);
+      if (bullet) {
+        if (curY + 20 > maxY) break;
+        doc.fillColor(theme.accent).fillOpacity(1).circle(x - 5, curY + 5.5, 2.5).fill();
+        doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10)
+           .text(_stripEmoji(bullet[1]), x, curY, { width: w, lineGap: 3 });
+        curY = Math.min(doc.y + 4, maxY);
+        continue;
+      }
+
+      // Línea completamente en negrita **texto**
+      if (/^\*\*.+\*\*$/.test(line.trim())) {
+        if (curY + 18 > maxY) break;
+        const clean = _stripEmoji(line.trim().replace(/^\*\*|\*\*$/g, ''));
+        doc.fillColor('#1F2937').fillOpacity(1).font('Helvetica-Bold').fontSize(10.5)
+           .text(clean, x, curY, { width: w, lineGap: 3 });
+        curY = Math.min(doc.y + 6, maxY);
+        continue;
+      }
+
+      // Párrafo normal (puede tener inline code y negrita)
+      if (curY + 14 > maxY) break;
+      const segs2 = splitInlineSegments(line);
+      const hasInline = segs2.some(s => s.bold || s.code);
+      if (hasInline) {
+        segs2.forEach((s2, i) => {
+          const isLast = i === segs2.length - 1;
+          if (!s2.text) return;
+          const cleanText = _stripEmoji(s2.text);
+          if (s2.code) {
+            // Fondo gris para inline code
+            const codeW = cleanText.length * 6 + 6;
+            if (i === 0) {
+              doc.save().fillOpacity(1).rect(x, curY - 1, Math.min(codeW, w), 14).fill('#F1F5F9').restore();
+            }
+            doc.fillColor('#1E293B').fillOpacity(1).font('Courier').fontSize(9)
+               .text(cleanText, i === 0 ? x : undefined, i === 0 ? curY : undefined, {
+                 continued: !isLast, width: w, lineGap: 4,
+               });
+          } else {
+            doc.fillColor('#374151').fillOpacity(1)
+               .font(s2.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10.5)
+               .text(cleanText, i === 0 ? x : undefined, i === 0 ? curY : undefined, {
+                 continued: !isLast, width: w, lineGap: 4, align: 'justify',
+               });
+          }
+        });
+        curY = Math.min(doc.y + 8, maxY);
+      } else {
+        doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(10.5)
+           .text(_stripEmoji(line), x, curY, { width: w, align: 'justify', lineGap: 4 });
+        curY = Math.min(doc.y + 8, maxY);
+      }
     }
   }
 
@@ -419,7 +536,7 @@ function _pdfTable(doc, table, x, w, y, maxY, theme) {
   doc.fillOpacity(1).rect(x, y, w, HDR_H).fill(theme.primary);
   headers.forEach((h, ci) => {
     doc.fillColor('#ffffff').fillOpacity(1).font('Helvetica-Bold').fontSize(9)
-       .text(String(h), x + ci * colW + 6, y + 7, { width: colW - 12, align: 'left', lineBreak: false });
+       .text(_stripEmoji(String(h)), x + ci * colW + 6, y + 7, { width: colW - 12, align: 'left', lineBreak: false });
   });
 
   // Data rows
@@ -436,7 +553,7 @@ function _pdfTable(doc, table, x, w, y, maxY, theme) {
 
     (row || []).forEach((cell, ci) => {
       doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(9)
-         .text(String(cell ?? ''), x + ci * colW + 6, ry + 6,
+         .text(_stripEmoji(String(cell ?? '')), x + ci * colW + 6, ry + 6,
                { width: colW - 12, align: 'left', lineBreak: false });
     });
   });
@@ -491,7 +608,7 @@ function _pdfFlowchart(doc, flowchart, x, w, y, maxY, theme) {
          .stroke(theme.primary);
       doc.restore();
       doc.fillColor('#ffffff').fillOpacity(1).font('Helvetica-Bold').fontSize(8)
-         .text(String(step), cx - dx + 8, cy - 8,
+         .text(_stripEmoji(String(step)), cx - dx + 8, cy - 8,
                { width: dx * 2 - 16, align: 'center', lineBreak: false });
     } else {
       // Caja redondeada
@@ -505,7 +622,7 @@ function _pdfFlowchart(doc, flowchart, x, w, y, maxY, theme) {
          .stroke(theme.primary);
       doc.restore();
       doc.fillColor(textC).fillOpacity(1).font('Helvetica').fontSize(9)
-         .text(String(step), boxX + 8, boxY + BOX_H / 2 - 7,
+         .text(_stripEmoji(String(step)), boxX + 8, boxY + BOX_H / 2 - 7,
                { width: BOX_W - 16, align: 'center', lineBreak: false });
     }
 
@@ -538,8 +655,9 @@ function _pdfFlowchart(doc, flowchart, x, w, y, maxY, theme) {
 // ── PDF Curiosity Box ────────────────────────────────────────────────────────
 function _pdfCuriosityBox(doc, text, x, w, y, theme) {
   if (!text) return y;
-  const BORDER = 4, PAD = 12, LABEL_H = 18;
-  const estLines = Math.ceil(text.length / ((w - PAD * 2 - BORDER) / 5.5));
+  const cleanText = _stripEmoji(text);
+  const BORDER = 4, PAD = 12, LABEL_H = 18, ICON_SIZE = 14;
+  const estLines = Math.ceil(cleanText.length / ((w - PAD * 2 - BORDER) / 5.5));
   const contentH = LABEL_H + 8 + estLines * 14 + PAD;
   const totalH   = contentH + PAD;
 
@@ -548,13 +666,21 @@ function _pdfCuriosityBox(doc, text, x, w, y, theme) {
   // Barra izquierda
   doc.fillOpacity(1).rect(x, y, BORDER, totalH).fill(theme.accent);
 
-  // Label
+  // Ícono dibujado: círculo accent con "!" (reemplaza emoji 💡)
+  const iconX = x + BORDER + PAD;
+  const iconY = y + PAD + 1;
+  doc.fillOpacity(1).circle(iconX + ICON_SIZE / 2, iconY + ICON_SIZE / 2, ICON_SIZE / 2).fill(theme.accent);
+  doc.fillColor('#ffffff').fillOpacity(1).font('Helvetica-Bold').fontSize(9)
+     .text('!', iconX, iconY + 2, { width: ICON_SIZE, align: 'center', lineBreak: false });
+
+  // Label "Dato curioso"
   doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(9.5)
-     .text('💡 Dato curioso', x + BORDER + PAD, y + PAD, { width: w - BORDER - PAD * 2 });
+     .text('Dato curioso', x + BORDER + PAD + ICON_SIZE + 6, y + PAD + 1,
+           { width: w - BORDER - PAD * 2 - ICON_SIZE - 6, lineBreak: false });
 
   // Texto
   doc.fillColor('#374151').fillOpacity(1).font('Helvetica').fontSize(9.5)
-     .text(text, x + BORDER + PAD, y + PAD + LABEL_H + 2,
+     .text(cleanText, x + BORDER + PAD, y + PAD + LABEL_H + 2,
            { width: w - BORDER - PAD * 2, lineGap: 3 });
 
   return y + totalH + 8;
