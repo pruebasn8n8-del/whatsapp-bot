@@ -77,6 +77,11 @@ function _isValidForStep(step, text) {
   const t = text.trim();
   const lower = t.toLowerCase().replace(/[!?.¿¡]+/g, '').trim();
 
+  if (t.length < 1) return false;
+
+  // Números del menú siempre son válidos en pasos que los aceptan
+  if (/^[1-4]$/.test(lower) && [STEPS.CONFIGURE_MENU, STEPS.VIBE, STEPS.EDIT_VIBE].includes(step)) return true;
+
   if (t.length < 2) return false;
 
   // Respuestas triviales rechazadas en todos los pasos
