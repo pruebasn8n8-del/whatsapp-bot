@@ -791,10 +791,11 @@ function setupRouter(sock, groqService) {
           await sock.sendPresenceUpdate('composing', jid);
           try {
             const typeLabel = docType === 'pptx' ? 'PowerPoint' : 'PDF';
-            // Pedir estructura JSON a Groq
+            // Pedir estructura JSON a Groq — incluye style y use_images
+            const styleGuide = `Elige el estilo según el tema:\n- "visual": entretenimiento, gaming, videojuegos, deportes, viajes, música, arte, cultura → use_images: true\n- "technical": tutoriales, guías paso a paso, instalaciones, programación, IT, configuración → use_images: false\n- "clean": negocios, reportes, análisis, académico, historia, ciencia → use_images: false`;
             const structurePrompt = docType === 'pptx'
-              ? `El usuario pidió: "${text}"\n\nGenera una presentación PowerPoint completa y detallada con al menos 6 slides de contenido rico. Responde SOLO con JSON válido, sin markdown:\n{"title":"...","slides":[{"title":"...","points":["punto detallado 1","punto detallado 2","punto detallado 3","punto detallado 4"]}]}`
-              : `El usuario pidió: "${text}"\n\nGenera un documento PDF completo y detallado con al menos 5 secciones bien desarrolladas. Responde SOLO con JSON válido, sin markdown:\n{"title":"...","sections":[{"heading":"...","content":"párrafo extenso con información relevante y detallada..."}]}`;
+              ? `El usuario pidió: "${text}"\n\n${styleGuide}\n\nGenera una presentación PowerPoint completa con al menos 6 slides. Responde SOLO con JSON válido:\n{"title":"...","style":"visual|technical|clean","use_images":true,"slides":[{"title":"...","points":["punto 1","punto 2","punto 3","punto 4"]}]}`
+              : `El usuario pidió: "${text}"\n\n${styleGuide}\n\nGenera un documento PDF completo con al menos 5 secciones bien desarrolladas. Responde SOLO con JSON válido:\n{"title":"...","style":"technical","use_images":false,"sections":[{"heading":"...","content":"párrafo extenso con información relevante y detallada..."}]}`;
 
             const structRes = await groqService.client.chat.completions.create({
               model: 'llama-3.3-70b-versatile',
@@ -812,12 +813,13 @@ function setupRouter(sock, groqService) {
             const structure = JSON.parse(raw);
             let fileBuffer, fileName, mimeType;
 
+            const docOpts = { style: structure.style || 'clean', useImages: !!structure.use_images };
             if (docType === 'pptx') {
-              fileBuffer = await generatePPTX(structure.title, structure.slides || []);
+              fileBuffer = await generatePPTX(structure.title, structure.slides || [], docOpts);
               fileName   = `${(structure.title || 'presentacion').substring(0, 40).replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s]/g, '').trim()}.pptx`;
               mimeType   = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
             } else {
-              fileBuffer = await generatePDF(structure.title, structure.sections || []);
+              fileBuffer = await generatePDF(structure.title, structure.sections || [], docOpts);
               fileName   = `${(structure.title || 'documento').substring(0, 40).replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s]/g, '').trim()}.pdf`;
               mimeType   = 'application/pdf';
             }
