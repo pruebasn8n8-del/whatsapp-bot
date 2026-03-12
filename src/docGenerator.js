@@ -472,6 +472,7 @@ async function generatePPTX(title, slides = []) {
     cover.addImage({
       data: coverDataUrl,
       x: 0, y: 0, w: W, h: H,
+      sizing: { type: 'cover', w: W, h: H },
     });
     // Overlay oscuro semi-transparente (transparency: 0–100, donde 100=invisible)
     cover.addShape(pptx.ShapeType.rect, {
@@ -628,6 +629,7 @@ async function generatePPTX(title, slides = []) {
     end.addImage({
       data: coverDataUrl,
       x: 0, y: 0, w: W, h: H,
+      sizing: { type: 'cover', w: W, h: H },
     });
     end.addShape(pptx.ShapeType.rect, {
       x: 0, y: 0, w: W, h: H,
