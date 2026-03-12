@@ -340,16 +340,17 @@ function _renderInlineLine(doc, rawText, x, y, w, baseFontSize, baseColor, opts 
   segs.forEach((seg, i) => {
     if (!seg.text) return;
     const isLast = i === segs.length - 1;
+    const isFirst = i === 0;
     if (seg.code) {
       doc.fillColor('#1E293B').fillOpacity(1).font('Courier').fontSize(baseFontSize - 1.5)
-         .text(seg.text, i === 0 ? x : undefined, i === 0 ? y : undefined, {
-           continued: !isLast, width: w, lineGap: opts.lineGap ?? 3,
+         .text(seg.text, isFirst ? x : undefined, isFirst ? y : undefined, {
+           continued: !isLast, ...(isFirst && { width: w }), lineGap: opts.lineGap ?? 3,
          });
     } else {
       doc.fillColor(seg.bold ? '#1F2937' : baseColor).fillOpacity(1)
          .font(seg.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(baseFontSize)
-         .text(seg.text, i === 0 ? x : undefined, i === 0 ? y : undefined, {
-           continued: !isLast, width: w, lineGap: opts.lineGap ?? 3, align: opts.align || 'left',
+         .text(seg.text, isFirst ? x : undefined, isFirst ? y : undefined, {
+           continued: !isLast, ...(isFirst && { width: w }), lineGap: opts.lineGap ?? 3, align: opts.align || 'left',
          });
     }
   });
@@ -970,7 +971,6 @@ function _pdfSectionClean(doc, sec, idx, title, theme) {
   doc.fillOpacity(1).rect(0, 0, W, H).fill('#ffffff');
   doc.rect(0, 0, 5, H).fill(theme.accent);
   doc.rect(0, 0, W, 2).fill(theme.primary);
-  doc.save().fillOpacity(1).rect(0, 2, W, HDR_H - 2).fill(theme.bg || '#F9FAFB').restore();
 
   // Número y título con margen superior cómodo
   doc.fillColor(theme.accent).fillOpacity(1).font('Helvetica-Bold').fontSize(10)
