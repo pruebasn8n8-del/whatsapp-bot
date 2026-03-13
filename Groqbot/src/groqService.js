@@ -789,7 +789,11 @@ class GroqService {
       systemPrompt += "\n\n[RESULTADOS DE BÚSQUEDA WEB — fuente principal de información]:\n" + initialSearchResults;
     }
     if (proactiveApiResults) {
-      systemPrompt += "\n\n[DATOS EN TIEMPO REAL — clima/sismos/festivos/divisas]:\n" + proactiveApiResults;
+      const isWeatherData = proactiveApiResults.includes('°C') || proactiveApiResults.includes('Clima en');
+      const proactiveNote = isWeatherData
+        ? '\n\n⚠️ ACCIÓN REQUERIDA: Ya obtuviste los datos de clima. Preséntaselos al usuario AHORA MISMO. NO preguntes ciudad, NO pidas confirmación, NO digas "un momento". Solo muestra los datos.'
+        : '';
+      systemPrompt += "\n\n[DATOS EN TIEMPO REAL — clima/sismos/festivos/divisas]:\n" + proactiveApiResults + proactiveNote;
     }
 
     const finCtx = this.financialContexts.get(userId);
