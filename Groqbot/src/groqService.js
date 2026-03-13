@@ -744,6 +744,13 @@ class GroqService {
       }
     }
 
+    // ---- Short-circuit: clima/sismos/festivos → retornar datos formateados directamente ----
+    if (proactiveApiResults && proactiveApiResults.includes('°C')) {
+      console.log('[Groq] Short-circuit: datos de clima, retornando sin LLM');
+      this.addToHistory(userId, 'assistant', proactiveApiResults);
+      return proactiveApiResults;
+    }
+
     // ---- Thinking step para consultas complejas ----
     let thinkingCtx = null;
     if (!isTrivial && this._shouldDeepThink(msgText)) {
