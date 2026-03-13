@@ -4,7 +4,7 @@
 const { handleGroqMessage } = require('../Groqbot/src/whatsappClient');
 const { handleGastosMessage } = require('../Gastos/src/whatsapp/messageHandler');
 const { sendBriefingNow, setScheduleTime, setEnabled, isEnabled, getScheduleTime, getScheduledTimes } = require('../DailyBriefing/src/scheduler');
-const { getLastNews, getNewsByTopics, formatNews } = require('../DailyBriefing/src/newsService');
+const { getLastNews, getNewsByTopics, formatNews, getExpandedNews } = require('../DailyBriefing/src/newsService');
 const { getMessageText, getInteractiveResponse, sendButtonMessage, PREFIX } = require('./messageUtils');
 const {
   getOnboardingState,
@@ -530,9 +530,12 @@ function setupRouter(sock, groqService) {
             let articleUrl = '';
             let summary = '';
             try {
-              const { searchResult, content } = await _findAndFetchArticle(n.title, n.source);
-              articleUrl = searchResult?.url || '';
-              if (content) summary = await _summarizeWithAI(groqService, n.title, content);
+              const expandedNews = await getExpandedNews(num - 1);
+              articleUrl = expandedNews?.url || '';
+              if (articleUrl) {
+                const content = await _fetchArticleContent(articleUrl);
+                if (content) summary = await _summarizeWithAI(groqService, n.title, content);
+              }
             } catch (e) {
               console.log('[Router] Error buscando articulo:', e.message);
             }
@@ -648,9 +651,12 @@ function setupRouter(sock, groqService) {
             let articleUrl = '';
             let summary = '';
             try {
-              const { searchResult, content } = await _findAndFetchArticle(n.title, n.source);
-              articleUrl = searchResult?.url || '';
-              if (content) summary = await _summarizeWithAI(groqService, n.title, content);
+              const expandedNews = await getExpandedNews(num - 1);
+              articleUrl = expandedNews?.url || '';
+              if (articleUrl) {
+                const content = await _fetchArticleContent(articleUrl);
+                if (content) summary = await _summarizeWithAI(groqService, n.title, content);
+              }
             } catch (e) {
               console.log('[Router] Error buscando artículo:', e.message);
             }
