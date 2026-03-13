@@ -610,7 +610,7 @@ function detectProactiveTool(message) {
   if (msg.length < 5) return null;
 
   // ---- Clima: cualquier mención de palabras clave climáticas ----
-  const weatherKeyword = /\b(clima|temperatura|tiempo(?!\s+libre|\s+es\s+oro|\s+muerto|\s+de\s+calidad|\s+que\s+falta)(?!\s+libre)|lluvi[ao]|lloviendo|va\s+a\s+llover|pronostic[oa]|calor\b|fr[íi]o\b|nublado|despejado|nevar|nevada|granizo|tormenta\b|humedad|viento\b|sol\s+hoy)\b/i;
+  const weatherKeyword = /\b(clima|temperatura|tiempo(?!\s+libre|\s+es\s+oro|\s+muerto|\s+de\s+calidad|\s+que\s+falta)(?!\s+libre)|lluvi[ao]|lloviendo|llueve|llover[áa]?|lloviznando|aguacero|chispea|va\s+a\s+llover|pronostic[oa]|calor\b|fr[íi]o\b|nublado|despejado|nevar|nevada|granizo|tormenta\b|humedad|viento\b|sol\s+hoy)\b/i;
   if (weatherKeyword.test(msg)) {
     // Intentar extraer ciudad del mensaje
     const cityExtractors = [
