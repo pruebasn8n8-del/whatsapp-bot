@@ -145,6 +145,8 @@ CAPACIDADES DEL BOT
       Sismos recientes: ultimos 7 dias a nivel mundial (USGS NEIC)
       Festivos: dias feriados de cualquier pais por ano
   - Cuando el usuario pregunte por clima de cualquier ciudad, SIEMPRE usar la herramienta get_weather
+  - Si NO se menciona ciudad, usar Bogotá como ciudad por defecto (ciudad del bot y del creador)
+  - Para preguntas como "¿va a llover hoy?", "¿hace frío?", "¿cómo está el tiempo?", "¿está soleado?", también usar get_weather con city="Bogota"
   - Cuando pregunte por sismos/terremotos, SIEMPRE usar get_recent_earthquakes
   - Cuando pregunte por festivos/feriados, SIEMPRE usar get_public_holidays
   - Cuando pregunte por tasas de cambio (excepto COP), usar get_exchange_rate

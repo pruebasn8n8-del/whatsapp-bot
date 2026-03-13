@@ -44,25 +44,49 @@ const WMO_EMOJI = (code, isDay) => {
 // CLIMA — Open-Meteo Geocoding + Weather (sin key)
 // https://open-meteo.com/
 // ============================================================
+
+/** Convierte grados de viento a punto cardinal (8 puntos) */
+function _windDeg2Dir(deg) {
+  if (deg === null || deg === undefined) return null;
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+}
+
+/** Formatea hora ISO (2026-03-13T06:09) → HH:MM en la timezone dada */
+function _fmtTime(isoStr, tz) {
+  if (!isoStr) return null;
+  try {
+    return new Date(isoStr).toLocaleTimeString('es-CO', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch { return null; }
+}
+
 async function getWeatherForCity(cityName) {
   if (!cityName || typeof cityName !== 'string') throw new Error('Nombre de ciudad requerido');
 
-  // 1. Geocodificar ciudad → coordenadas
-  const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=1&language=es&format=json`;
-  const geoRes = await fetch(geoUrl, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
-  if (!geoRes.ok) throw new Error('Error buscando ciudad: ' + geoRes.status);
-  const geoData = await geoRes.json();
+  let latitude, longitude, name, country, timezone, admin1;
 
-  if (!geoData.results || geoData.results.length === 0) {
-    throw new Error(`Ciudad "${cityName}" no encontrada`);
+  // Bogotá shortcut — coordenadas hardcodeadas, sin geocoding
+  const isBogota = /^bog[oa]t[aá]$/i.test(cityName.trim());
+  if (isBogota) {
+    latitude = 4.6097; longitude = -74.0817;
+    name = 'Bogotá'; country = 'Colombia'; timezone = 'America/Bogota'; admin1 = 'Cundinamarca';
+  } else {
+    // 1. Geocodificar ciudad → coordenadas
+    const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=1&language=es&format=json`;
+    const geoRes = await fetch(geoUrl, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
+    if (!geoRes.ok) throw new Error('Error buscando ciudad: ' + geoRes.status);
+    const geoData = await geoRes.json();
+
+    if (!geoData.results || geoData.results.length === 0) {
+      throw new Error(`Ciudad "${cityName}" no encontrada`);
+    }
+    ({ latitude, longitude, name, country, timezone, admin1 } = geoData.results[0]);
   }
 
-  const { latitude, longitude, name, country, timezone, admin1 } = geoData.results[0];
-
-  // 2. Obtener clima actual + pronóstico 3 días
+  // 2. Obtener clima actual + pronóstico 4 días
   const wUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
-    `&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,is_day,wind_speed_10m,precipitation` +
-    `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code,uv_index_max` +
+    `&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,is_day,wind_speed_10m,wind_direction_10m,precipitation,uv_index,cloud_cover` +
+    `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code,uv_index_max,sunrise,sunset,precipitation_sum,wind_speed_10m_max` +
     `&timezone=${encodeURIComponent(timezone || 'auto')}&forecast_days=4`;
 
   const wRes = await fetch(wUrl, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
@@ -71,6 +95,7 @@ async function getWeatherForCity(cityName) {
 
   const c = wData.current;
   const d = wData.daily;
+  const tz = timezone || 'auto';
 
   const forecast = (d.time || []).slice(0, 4).map((date, i) => ({
     date,
@@ -79,19 +104,26 @@ async function getWeatherForCity(cityName) {
     rain: d.precipitation_probability_max[i] || 0,
     code: d.weather_code[i],
     uvMax: d.uv_index_max ? Math.round(d.uv_index_max[i]) : null,
+    sunrise: _fmtTime(d.sunrise ? d.sunrise[i] : null, tz),
+    sunset: _fmtTime(d.sunset ? d.sunset[i] : null, tz),
+    precipSum: d.precipitation_sum ? (d.precipitation_sum[i] || 0) : 0,
+    windMax: d.wind_speed_10m_max ? Math.round(d.wind_speed_10m_max[i]) : null,
   }));
 
   return {
     city: name,
     region: admin1 || null,
     country: country || null,
-    timezone: timezone || null,
+    timezone: tz,
     current: {
       temp: Math.round(c.temperature_2m),
       feelsLike: Math.round(c.apparent_temperature),
       humidity: c.relative_humidity_2m,
       windKmph: Math.round(c.wind_speed_10m),
+      windDir: _windDeg2Dir(c.wind_direction_10m),
       precipitation: c.precipitation || 0,
+      uvIndex: c.uv_index !== undefined ? Math.round(c.uv_index) : null,
+      cloudCover: c.cloud_cover !== undefined ? c.cloud_cover : null,
       code: c.weather_code,
       description: WMO_DESC[c.weather_code] || 'condiciones variables',
       emoji: WMO_EMOJI(c.weather_code, c.is_day),
@@ -102,15 +134,36 @@ async function getWeatherForCity(cityName) {
 }
 
 function formatWeatherResponse(data) {
-  const { city, region, country, current: c, forecast } = data;
+  const { city, region, country, current: c, forecast, timezone } = data;
   const location = [city, region, country].filter(Boolean).join(', ');
+
+  // UV label
+  const uvLabel = (uv) => {
+    if (uv === null || uv === undefined) return '';
+    if (uv >= 11) return `UV ${uv} 🔴 extremo`;
+    if (uv >= 8) return `UV ${uv} ⚠️`;
+    if (uv >= 6) return `UV ${uv}`;
+    return `UV ${uv}`;
+  };
+
+  const windStr = c.windDir ? `${c.windKmph} km/h → ${c.windDir}` : `${c.windKmph} km/h`;
+  const cloudStr = c.cloudCover !== null ? `Nubes: ${c.cloudCover}%` : null;
+  const uvStr = c.uvIndex !== null ? uvLabel(c.uvIndex) : null;
 
   const lines = [
     `${c.emoji} *Clima en ${location}*`,
     `Ahora: *${c.temp}°C* — ${c.description}`,
-    `Sensación térmica: ${c.feelsLike}°C  |  Humedad: ${c.humidity}%`,
-    `Viento: ${c.windKmph} km/h`,
+    `Sensación: ${c.feelsLike}°C  |  Humedad: ${c.humidity}%${cloudStr ? `  |  ${cloudStr}` : ''}`,
+    `Viento: ${windStr}${uvStr ? `  |  ${uvStr}` : ''}`,
   ];
+
+  // Amanecer/atardecer del día de hoy (primer elemento del forecast)
+  if (forecast.length > 0 && (forecast[0].sunrise || forecast[0].sunset)) {
+    const sun = [];
+    if (forecast[0].sunrise) sun.push(`🌅 Amanecer: ${forecast[0].sunrise}`);
+    if (forecast[0].sunset) sun.push(`🌇 Atardecer: ${forecast[0].sunset}`);
+    lines.push(sun.join('  |  '));
+  }
 
   if (c.precipitation > 0) {
     lines.push(`Precipitación actual: ${c.precipitation} mm`);
@@ -123,8 +176,9 @@ function formatWeatherResponse(data) {
       const label = isToday ? 'Hoy' : new Date(day.date + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' });
       const em = WMO_EMOJI(day.code, true);
       const rain = day.rain > 30 ? ` ☂️ ${day.rain}%` : day.rain > 0 ? ` (${day.rain}% lluvia)` : '';
-      const uv = day.uvMax !== null && day.uvMax > 6 ? ` ☀️UV ${day.uvMax}` : '';
-      lines.push(`  ${em} *${label}:* ${day.maxC}° / ${day.minC}°${rain}${uv}`);
+      const precip = day.precipSum > 0 ? ` (${day.precipSum}mm)` : '';
+      const uv = day.uvMax !== null && day.uvMax >= 6 ? `  ☀️${uvLabel(day.uvMax)}` : '';
+      lines.push(`  ${em} *${label}:* ${day.maxC}° / ${day.minC}°${rain}${precip}${uv}`);
     }
   }
 
