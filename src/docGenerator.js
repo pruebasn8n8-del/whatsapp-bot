@@ -1042,7 +1042,8 @@ async function generatePDF(title, sections = [], references = [], opts = {}) {
 
 // ── generatePPTX ──────────────────────────────────────────────────────────────
 async function generatePPTX(title, slides = [], references = [], opts = {}) {
-  const { style = 'clean', useImages = false } = opts;
+  const { style = 'clean', useImages = false, subtitle = '', author = '' } = opts;
+  const coverAuthor = author || 'Cortana · @andrewhypervenom';
   const theme   = getTheme(title);
   const keyword = titleToKeyword(title);
 
@@ -1094,11 +1095,21 @@ async function generatePPTX(title, slides = [], references = [], opts = {}) {
       fontSize: 8.5, color: WHITE, align: 'center', charSpacing: 2.5, transparency: 45,
     });
     cover.addText(title, {
-      x: 0.35, y: H * 0.20, w: W * 0.57, h: H * 0.48,
+      x: 0.35, y: H * 0.20, w: W * 0.57, h: H * 0.35,
       fontSize: 30, bold: true, color: DARK,
       align: 'left', valign: 'middle', wrap: true,
     });
-    cover.addText(`${fmtDate()}  ·  Cortana @andrewhypervenom`, {
+    if (subtitle) {
+      cover.addText(subtitle, {
+        x: 0.35, y: H * 0.57, w: W * 0.57, h: 0.32,
+        fontSize: 12, color: DARK, align: 'left', transparency: 35,
+      });
+      cover.addShape(pptx.ShapeType.rect, {
+        x: 0.35, y: H * 0.63, w: 0.50, h: 0.035,
+        fill: { color: ACC }, line: { color: ACC, width: 0 },
+      });
+    }
+    cover.addText(`${fmtDate()}  ·  ${coverAuthor}`, {
       x: 0.35, y: H * 0.76, w: W * 0.57, h: 0.32,
       fontSize: 9, color: MGRAY, align: 'left',
     });
@@ -1122,11 +1133,21 @@ async function generatePPTX(title, slides = [], references = [], opts = {}) {
       align: 'left', valign: 'middle', transparency: 48,
     });
     cover.addText(title, {
-      x: W * 0.11, y: H * 0.28, w: W * 0.78, h: H * 0.46,
+      x: W * 0.11, y: H * 0.28, w: W * 0.78, h: H * 0.35,
       fontSize: 34, bold: true, color: WHITE,
       align: 'left', valign: 'middle', wrap: true,
     });
-    cover.addText(`${fmtDate()}  ·  Cortana @andrewhypervenom`, {
+    if (subtitle) {
+      cover.addText(subtitle, {
+        x: W * 0.11, y: H * 0.65, w: W * 0.78, h: 0.30,
+        fontSize: 14, color: WHITE, align: 'left', transparency: 28,
+      });
+      cover.addShape(pptx.ShapeType.rect, {
+        x: W * 0.11, y: H * 0.68, w: 0.50, h: 0.035,
+        fill: { color: ACC }, line: { color: ACC, width: 0 },
+      });
+    }
+    cover.addText(`${fmtDate()}  ·  ${coverAuthor}`, {
       x: W * 0.11, y: H * 0.78, w: W * 0.78, h: 0.32,
       fontSize: 9, color: WHITE, align: 'left', transparency: 40,
     });
@@ -1167,11 +1188,21 @@ async function generatePPTX(title, slides = [], references = [], opts = {}) {
       align: 'left', valign: 'middle', transparency: 45,
     });
     cover.addText(title, {
-      x: W * 0.11, y: H * 0.28, w: W * 0.52, h: H * 0.48,
+      x: W * 0.11, y: H * 0.28, w: W * 0.52, h: H * 0.35,
       fontSize: 32, bold: true, color: WHITE,
       align: 'left', valign: 'middle', wrap: true,
     });
-    cover.addText(`${fmtDate()}  ·  Cortana @andrewhypervenom`, {
+    if (subtitle) {
+      cover.addText(subtitle, {
+        x: W * 0.11, y: H * 0.65, w: W * 0.52, h: 0.30,
+        fontSize: 14, color: WHITE, align: 'left', transparency: 28,
+      });
+      cover.addShape(pptx.ShapeType.rect, {
+        x: W * 0.11, y: H * 0.68, w: 0.50, h: 0.035,
+        fill: { color: ACC }, line: { color: ACC, width: 0 },
+      });
+    }
+    cover.addText(`${fmtDate()}  ·  ${coverAuthor}`, {
       x: W * 0.11, y: H * 0.78, w: W * 0.50, h: 0.32,
       fontSize: 9, color: WHITE, align: 'left', transparency: 40,
     });
@@ -1187,6 +1218,27 @@ async function generatePPTX(title, slides = [], references = [], opts = {}) {
 
   // ── SLIDES DE CONTENIDO ───────────────────────────────────────────────────
   slides.forEach((slide, idx) => {
+    const type = slide.type || 'content';
+
+    // Dispatch special slide types
+    if (type === 'section_divider') {
+      const s = pptx.addSlide();
+      _pptxSectionDivider(s, pptx, slide, PRI, ACC, WHITE, W, H);
+      return;
+    }
+    if (type === 'kpi_slide') {
+      const s = pptx.addSlide();
+      s.background = { color: WHITE };
+      _pptxKpiSlide(s, pptx, slide, idx, style, PRI, ACC, LGRAY, TEXTC, DARK, WHITE, MGRAY, W, H, title);
+      return;
+    }
+    if (type === 'two_column') {
+      const s = pptx.addSlide();
+      s.background = { color: WHITE };
+      _pptxTwoColumn(s, pptx, slide, idx, style, PRI, ACC, DARK, TEXTC, LGRAY, WHITE, MGRAY, W, H, title);
+      return;
+    }
+
     const s = pptx.addSlide();
     s.background = { color: WHITE };
     const points      = slide.points || [];
@@ -1229,7 +1281,7 @@ async function generatePPTX(title, slides = [], references = [], opts = {}) {
         points.forEach((p, pi) => {
           const rowY = contentStartY + pi * rowH;
           s.addShape(pptx.ShapeType.ellipse, { x: 0.32, y: rowY + rowH * 0.5 - 0.07, w: 0.14, h: 0.14, fill: { color: ACC }, line: { color: ACC, width: 0 } });
-          s.addText(p, { x: 0.58, y: rowY, w: W * 0.60 - 0.70, h: rowH, fontSize: 11, color: TEXTC, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0 });
+          s.addText(_parsePptxInline(p, { color: TEXTC }), { x: 0.58, y: rowY, w: W * 0.60 - 0.70, h: rowH, fontSize: 11, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0 });
         });
       }
 
@@ -1268,10 +1320,9 @@ async function generatePPTX(title, slides = [], references = [], opts = {}) {
           const rowY = contentStartY + pi * rowH;
           if (pi % 2 === 0) s.addShape(pptx.ShapeType.rect, { x: 0.25, y: rowY - 0.04, w: txtW, h: rowH - 0.04, fill: { color: LGRAY }, line: { color: LGRAY, width: 0 } });
           s.addShape(pptx.ShapeType.ellipse, { x: 0.35, y: rowY + rowH * 0.5 - 0.07, w: 0.14, h: 0.14, fill: { color: ACC }, line: { color: ACC, width: 0 } });
-          s.addText(p, { x: 0.61, y: rowY, w: txtW - 0.48, h: rowH, fontSize: 11, color: TEXTC, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0 });
+          s.addText(_parsePptxInline(p, { color: TEXTC }), { x: 0.61, y: rowY, w: txtW - 0.48, h: rowH, fontSize: 11, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0 });
         });
       }
-      s.addText(title, { x: 0.25, y: H - 0.30, w: W - 0.50, h: 0.26, fontSize: 7, color: MGRAY, align: 'left', valign: 'middle' });
 
     } else {
       // clean
@@ -1300,10 +1351,9 @@ async function generatePPTX(title, slides = [], references = [], opts = {}) {
         points.forEach((p, pi) => {
           const rowY = contentStartY + pi * rowH;
           s.addShape(pptx.ShapeType.ellipse, { x: 0.32, y: rowY + rowH * 0.5 - 0.06, w: 0.12, h: 0.12, fill: { color: ACC }, line: { color: ACC, width: 0 } });
-          s.addText(p, { x: 0.56, y: rowY, w: W - 0.78, h: rowH, fontSize: 11, color: TEXTC, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0 });
+          s.addText(_parsePptxInline(p, { color: TEXTC }), { x: 0.56, y: rowY, w: W - 0.78, h: rowH, fontSize: 11, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0 });
         });
       }
-      s.addText(title, { x: 0.25, y: H - 0.30, w: W - 0.50, h: 0.26, fontSize: 7, color: MGRAY, align: 'left', valign: 'middle' });
     }
 
     // Curiosity box al fondo (todos los estilos)
@@ -1321,6 +1371,9 @@ async function generatePPTX(title, slides = [], references = [], opts = {}) {
         x: 0.34, y: boxY + 0.06, w: W - 0.62, h: 0.66,
         fontSize: 9, color: TEXTC, align: 'left', valign: 'middle', wrap: true,
       });
+    } else {
+      // Footer consistente en slides de contenido sin curiosity
+      _pptxFooter(s, pptx, title, idx + 2, PRI, ACC, MGRAY, W, H);
     }
   });
 
@@ -1342,6 +1395,7 @@ async function generatePPTX(title, slides = [], references = [], opts = {}) {
         { text: apa + (ref.url ? `\n${ref.url}` : ''), options: { color: TEXTC } },
       ], { x: 0.25, y: refY, w: W - 0.50, h: 0.65, fontSize: 9.5, wrap: true });
     });
+    _pptxFooter(refSlide, pptx, title, slides.length + 2, PRI, ACC, MGRAY, W, H);
   }
 
   // ── SLIDE FINAL ───────────────────────────────────────────────────────────
@@ -1454,6 +1508,203 @@ function _pptxAddFlowchart(s, pptx, flowchart, x, y, w, availH, PRI, ACC, DARK, 
       });
     }
   });
+}
+
+// ── PPTX helper: parsear inline bold **texto** ────────────────────────────────
+function _parsePptxInline(text, baseOpts = {}) {
+  if (!text || !text.includes('**')) {
+    return [{ text: String(text || ''), options: { bold: false, ...baseOpts } }];
+  }
+  const parts = String(text).split(/(\*\*[^*]+\*\*)/g);
+  return parts
+    .filter(p => p.length > 0)
+    .map(p => {
+      if (p.startsWith('**') && p.endsWith('**')) {
+        return { text: p.slice(2, -2), options: { bold: true, ...baseOpts } };
+      }
+      return { text: p, options: { bold: false, ...baseOpts } };
+    });
+}
+
+// ── PPTX helper: footer consistente ──────────────────────────────────────────
+function _pptxFooter(s, pptx, title, pageNum, PRI, ACC, MGRAY, W, H) {
+  s.addShape(pptx.ShapeType.rect, {
+    x: 0, y: H - 0.34, w: W, h: 0.018,
+    fill: { color: PRI, transparency: 70 }, line: { color: PRI, width: 0 },
+  });
+  s.addText(String(title || ''), {
+    x: 0.22, y: H - 0.32, w: W * 0.72, h: 0.26,
+    fontSize: 7, color: MGRAY, align: 'left',
+  });
+  s.addText(String(pageNum), {
+    x: W - 0.55, y: H - 0.32, w: 0.33, h: 0.26,
+    fontSize: 9, bold: true, color: ACC, align: 'right',
+  });
+}
+
+// ── PPTX helper: slide divisor de sección ────────────────────────────────────
+function _pptxSectionDivider(s, pptx, slide, PRI, ACC, WHITE, W, H) {
+  s.background = { color: PRI };
+  s.addShape(pptx.ShapeType.rect, {
+    x: 0, y: 0, w: 0.12, h: H,
+    fill: { color: ACC }, line: { color: ACC, width: 0 },
+  });
+  s.addText(String(slide.title || ''), {
+    x: 0.50, y: H * 0.28, w: W - 0.70, h: H * 0.44,
+    fontSize: 40, bold: true, color: WHITE,
+    align: 'left', valign: 'middle', wrap: true,
+  });
+  if (slide.subtitle) {
+    s.addShape(pptx.ShapeType.rect, {
+      x: 0.50, y: H * 0.75, w: 2.0, h: 0.04,
+      fill: { color: ACC }, line: { color: ACC, width: 0 },
+    });
+    s.addText(String(slide.subtitle), {
+      x: 0.50, y: H * 0.77, w: W - 0.70, h: 0.40,
+      fontSize: 11, color: WHITE, align: 'left', transparency: 38,
+    });
+  }
+}
+
+// ── PPTX helper: slide de KPIs ────────────────────────────────────────────────
+function _pptxKpiSlide(s, pptx, slide, idx, style, PRI, ACC, LGRAY, TEXTC, DARK, WHITE, MGRAY, W, H, title) {
+  // Header según estilo
+  if (style === 'technical') {
+    s.addText(String(idx + 1).padStart(2, '0'), {
+      x: W * 0.55, y: H * 0.05, w: W * 0.43, h: H * 0.80,
+      fontSize: 150, bold: true, color: LGRAY, align: 'center', valign: 'middle',
+    });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.05, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+    s.addShape(pptx.ShapeType.rect, { x: 0.22, y: 0.14, w: 0.65, h: 0.65, fill: { color: ACC }, line: { color: ACC, width: 0 } });
+    s.addText(String(idx + 1).padStart(2, '0'), {
+      x: 0.22, y: 0.14, w: 0.65, h: 0.65,
+      fontSize: 18, bold: true, color: WHITE, align: 'center', valign: 'middle',
+    });
+    s.addText(slide.title || '', { x: 1.05, y: 0.17, w: W - 1.30, h: 0.58, fontSize: 17, bold: true, color: DARK, align: 'left', valign: 'middle', wrap: true });
+    s.addShape(pptx.ShapeType.rect, { x: 0.22, y: 0.98, w: W - 0.44, h: 0.02, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+  } else if (style === 'visual') {
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.72, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+    s.addShape(pptx.ShapeType.rect, { x: W - 0.82, y: 0, w: 0.82, h: 0.72, fill: { color: ACC }, line: { color: ACC, width: 0 } });
+    s.addText(String(idx + 1).padStart(2, '0'), {
+      x: W - 0.82, y: 0, w: 0.82, h: 0.72,
+      fontSize: 17, bold: true, color: WHITE, align: 'center', valign: 'middle',
+    });
+    s.addText(slide.title || '', { x: 0.25, y: 0, w: W - 1.20, h: 0.72, fontSize: 16, bold: true, color: WHITE, align: 'left', valign: 'middle', wrap: true });
+  } else {
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.03, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.03, w: W, h: 0.68, fill: { color: LGRAY }, line: { color: LGRAY, width: 0 } });
+    s.addText(String(idx + 1).padStart(2, '0'), { x: 0.22, y: 0.08, w: 0.55, h: 0.55, fontSize: 14, bold: true, color: ACC, align: 'center', valign: 'middle' });
+    s.addText(slide.title || '', { x: 0.90, y: 0.10, w: W - 1.12, h: 0.55, fontSize: 16, bold: true, color: DARK, align: 'left', valign: 'middle', wrap: true });
+    s.addShape(pptx.ShapeType.rect, { x: 0.22, y: 0.77, w: W - 0.44, h: 0.02, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+  }
+
+  const kpis = (slide.kpis || []).slice(0, 4);
+  const headerH = style === 'technical' ? 1.10 : (style === 'visual' ? 0.84 : 0.86);
+  const footerH = 0.35;
+  const gridTop = headerH;
+  const gridBot = H - footerH;
+  const cellW = (W - 0.44 - 0.12) / 2;
+  const cellH = (gridBot - gridTop - 0.12) / 2;
+
+  kpis.forEach((kpi, ki) => {
+    const col = ki % 2;
+    const row = Math.floor(ki / 2);
+    const boxX = 0.22 + col * (cellW + 0.12);
+    const boxY = gridTop + row * (cellH + 0.12);
+
+    s.addShape(pptx.ShapeType.rect, {
+      x: boxX, y: boxY, w: cellW, h: cellH,
+      fill: { color: LGRAY }, line: { color: 'E5E7EB', width: 0.8 },
+    });
+    s.addShape(pptx.ShapeType.rect, {
+      x: boxX, y: boxY, w: cellW, h: 0.06,
+      fill: { color: PRI }, line: { color: PRI, width: 0 },
+    });
+    s.addText(String(kpi.value || ''), {
+      x: boxX, y: boxY + 0.22, w: cellW, h: 0.65,
+      fontSize: 36, bold: true, color: PRI, align: 'center', valign: 'middle',
+    });
+    if (kpi.delta) {
+      s.addText(String(kpi.delta), {
+        x: boxX, y: boxY + cellH * 0.62, w: cellW, h: 0.30,
+        fontSize: 13, bold: true, color: ACC, align: 'center',
+      });
+    }
+    s.addText(String(kpi.label || ''), {
+      x: boxX + 0.08, y: boxY + cellH * 0.80, w: cellW - 0.16, h: 0.30,
+      fontSize: 9.5, color: '6B7280', wrap: true, align: 'center',
+    });
+  });
+
+  _pptxFooter(s, pptx, title, idx + 2, PRI, ACC, MGRAY, W, H);
+}
+
+// ── PPTX helper: slide dos columnas ──────────────────────────────────────────
+function _pptxTwoColumn(s, pptx, slide, idx, style, PRI, ACC, DARK, TEXTC, LGRAY, WHITE, MGRAY, W, H, title) {
+  // Header según estilo
+  if (style === 'technical') {
+    s.addText(String(idx + 1).padStart(2, '0'), {
+      x: W * 0.55, y: H * 0.05, w: W * 0.43, h: H * 0.80,
+      fontSize: 150, bold: true, color: LGRAY, align: 'center', valign: 'middle',
+    });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.05, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+    s.addShape(pptx.ShapeType.rect, { x: 0.22, y: 0.14, w: 0.65, h: 0.65, fill: { color: ACC }, line: { color: ACC, width: 0 } });
+    s.addText(String(idx + 1).padStart(2, '0'), {
+      x: 0.22, y: 0.14, w: 0.65, h: 0.65,
+      fontSize: 18, bold: true, color: WHITE, align: 'center', valign: 'middle',
+    });
+    s.addText(slide.title || '', { x: 1.05, y: 0.17, w: W - 1.30, h: 0.58, fontSize: 17, bold: true, color: DARK, align: 'left', valign: 'middle', wrap: true });
+    s.addShape(pptx.ShapeType.rect, { x: 0.22, y: 0.98, w: W - 0.44, h: 0.02, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+  } else if (style === 'visual') {
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.72, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+    s.addShape(pptx.ShapeType.rect, { x: W - 0.82, y: 0, w: 0.82, h: 0.72, fill: { color: ACC }, line: { color: ACC, width: 0 } });
+    s.addText(String(idx + 1).padStart(2, '0'), {
+      x: W - 0.82, y: 0, w: 0.82, h: 0.72,
+      fontSize: 17, bold: true, color: WHITE, align: 'center', valign: 'middle',
+    });
+    s.addText(slide.title || '', { x: 0.25, y: 0, w: W - 1.20, h: 0.72, fontSize: 16, bold: true, color: WHITE, align: 'left', valign: 'middle', wrap: true });
+  } else {
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.03, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.03, w: W, h: 0.68, fill: { color: LGRAY }, line: { color: LGRAY, width: 0 } });
+    s.addText(String(idx + 1).padStart(2, '0'), { x: 0.22, y: 0.08, w: 0.55, h: 0.55, fontSize: 14, bold: true, color: ACC, align: 'center', valign: 'middle' });
+    s.addText(slide.title || '', { x: 0.90, y: 0.10, w: W - 1.12, h: 0.55, fontSize: 16, bold: true, color: DARK, align: 'left', valign: 'middle', wrap: true });
+    s.addShape(pptx.ShapeType.rect, { x: 0.22, y: 0.77, w: W - 0.44, h: 0.02, fill: { color: PRI }, line: { color: PRI, width: 0 } });
+  }
+
+  const contentY = style === 'technical' ? 1.10 : (style === 'visual' ? 0.84 : 0.86);
+  const contentH = H - contentY - 0.40;
+  const midX = W * 0.50 + 0.03;
+
+  // Divisor vertical
+  s.addShape(pptx.ShapeType.rect, {
+    x: midX, y: contentY, w: 0.015, h: contentH,
+    fill: { color: 'E5E7EB' }, line: { color: 'E5E7EB', width: 0 },
+  });
+
+  // Columna izquierda: párrafo
+  if (slide.left) {
+    s.addText(String(slide.left), {
+      x: 0.22, y: contentY + 0.05, w: W * 0.46, h: contentH,
+      fontSize: 11, color: TEXTC, wrap: true, align: 'left', valign: 'top',
+    });
+  }
+
+  // Columna derecha: bullets
+  const rightPoints = slide.right_points || [];
+  const rowH = rightPoints.length > 0 ? Math.min(contentH / rightPoints.length, 0.84) : 0.84;
+  rightPoints.forEach((p, pi) => {
+    const rowY = contentY + pi * rowH;
+    s.addShape(pptx.ShapeType.ellipse, {
+      x: W * 0.52 + 0.05, y: rowY + rowH * 0.5 - 0.07, w: 0.14, h: 0.14,
+      fill: { color: ACC }, line: { color: ACC, width: 0 },
+    });
+    s.addText(_parsePptxInline(p, { color: TEXTC }), {
+      x: W * 0.52 + 0.30, y: rowY, w: W * 0.44 - 0.10, h: rowH,
+      fontSize: 11, align: 'left', valign: 'middle', wrap: true, paraSpaceAfter: 0,
+    });
+  });
+
+  _pptxFooter(s, pptx, title, idx + 2, PRI, ACC, MGRAY, W, H);
 }
 
 // ── Detección de tipo de documento con IA ────────────────────────────────────
