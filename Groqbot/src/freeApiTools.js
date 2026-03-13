@@ -53,11 +53,12 @@ function _windDeg2Dir(deg) {
 }
 
 /** Formatea hora ISO (2026-03-13T06:09) → HH:MM en la timezone dada */
-function _fmtTime(isoStr, tz) {
+function _fmtTime(isoStr) {
   if (!isoStr) return null;
-  try {
-    return new Date(isoStr).toLocaleTimeString('es-CO', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
-  } catch { return null; }
+  // Open-Meteo devuelve sunrise/sunset ya en hora local de la ciudad (sin sufijo Z)
+  // Extraer HH:MM directo del string — no convertir con Date para evitar doble offset
+  const m = isoStr.match(/T(\d{2}:\d{2})/);
+  return m ? m[1] : null;
 }
 
 async function getWeatherForCity(cityName) {
@@ -104,8 +105,8 @@ async function getWeatherForCity(cityName) {
     rain: d.precipitation_probability_max[i] || 0,
     code: d.weather_code[i],
     uvMax: d.uv_index_max ? Math.round(d.uv_index_max[i]) : null,
-    sunrise: _fmtTime(d.sunrise ? d.sunrise[i] : null, tz),
-    sunset: _fmtTime(d.sunset ? d.sunset[i] : null, tz),
+    sunrise: _fmtTime(d.sunrise ? d.sunrise[i] : null),
+    sunset: _fmtTime(d.sunset ? d.sunset[i] : null),
     precipSum: d.precipitation_sum ? (d.precipitation_sum[i] || 0) : 0,
     windMax: d.wind_speed_10m_max ? Math.round(d.wind_speed_10m_max[i]) : null,
   }));
