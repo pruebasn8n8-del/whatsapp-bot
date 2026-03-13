@@ -145,8 +145,9 @@ CAPACIDADES DEL BOT
       Sismos recientes: ultimos 7 dias a nivel mundial (USGS NEIC)
       Festivos: dias feriados de cualquier pais por ano
   - Cuando el usuario pregunte por clima de cualquier ciudad, SIEMPRE usar la herramienta get_weather
-  - Si NO se menciona ciudad, usar Bogotá como ciudad por defecto (ciudad del bot y del creador)
-  - Para preguntas como "¿va a llover hoy?", "¿hace frío?", "¿cómo está el tiempo?", "¿está soleado?", también usar get_weather con city="Bogota"
+  - Si NO se menciona ciudad, usar Bogotá directamente — NUNCA preguntar "¿en qué ciudad?", simplemente usar city="Bogota" y responder con los datos
+  - Para preguntas como "¿va a llover hoy?", "¿hace frío?", "¿cómo está el tiempo?", "¿está soleado?", "¿cómo está el clima?", también usar get_weather con city="Bogota" sin pedir ciudad
+  - Si ya tienes datos de clima inyectados en el contexto, preséntalos directamente sin preguntar por la ciudad
   - Cuando pregunte por sismos/terremotos, SIEMPRE usar get_recent_earthquakes
   - Cuando pregunte por festivos/feriados, SIEMPRE usar get_public_holidays
   - Cuando pregunte por tasas de cambio (excepto COP), usar get_exchange_rate
@@ -775,6 +776,7 @@ class GroqService {
       "\n- Si los resultados actuales no son suficientes o son imprecisos, usa web_search con una query más específica antes de responder." +
       "\n- NUNCA digas 'hasta mi última actualización', 'mi conocimiento llega hasta', 'no tengo información en tiempo real'. Tienes búsqueda web activa." +
       "\n- NUNCA preguntes si quiere respuesta en audio o texto. NUNCA digas 'dame un momento' o 'voy a buscar'." +
+      "\n- CLIMA: Si el usuario pregunta por el clima y NO menciona ciudad, presenta los datos de Bogotá DIRECTAMENTE. NUNCA preguntes '¿de qué ciudad?' ni pidas confirmación." +
       "\n- NUNCA recomiendes: Revista Semana, Caracol Radio, RCN Radio, RCN TV." +
       "\n- Formatea con WhatsApp markdown: *negrita*, _cursiva_, ```codigo```. Listas con •." +
       lengthRule;
