@@ -174,6 +174,24 @@ function _weatherTip(rainTodayPct, rainTomorrowPct, uvIndex) {
   return opts[Math.floor(Math.random() * opts.length)];
 }
 
+// Expande abreviaciones de punto cardinal a nombre completo
+const _DIR_NAMES = {
+  N: 'Norte', S: 'Sur', E: 'Este', O: 'Oeste', W: 'Oeste',
+  NE: 'Noreste', NO: 'Noroeste', NW: 'Noroeste',
+  SE: 'Sureste', SO: 'Suroeste', SW: 'Suroeste',
+};
+function _expandDir(dir) {
+  return _DIR_NAMES[dir] || dir;
+}
+
+// Etiqueta de nivel UV legible
+function _uvLabel(uv) {
+  if (uv >= 11) return `UV ${uv} — extremo 🔴`;
+  if (uv >= 8)  return `UV ${uv} — alto ⚠️`;
+  if (uv >= 6)  return `UV ${uv} — moderado`;
+  return `UV ${uv}`;
+}
+
 function formatWeatherResponse(data) {
   const { city, region, country, current: c, forecast } = data;
 
@@ -181,23 +199,24 @@ function formatWeatherResponse(data) {
   const regionClean = region && !region.toLowerCase().includes(city.toLowerCase()) ? region : null;
   const location = [city, regionClean, country].filter(Boolean).join(', ');
 
-  const uvStr = c.uvIndex !== null
-    ? `UV ${c.uvIndex}${c.uvIndex >= 11 ? ' 🔴' : c.uvIndex >= 8 ? ' ⚠️' : ''}`
-    : null;
-  const windStr = c.windDir ? `💨 ${c.windKmph} km/h ${c.windDir}` : `💨 ${c.windKmph} km/h`;
+  const uvStr = c.uvIndex !== null ? _uvLabel(c.uvIndex) : null;
+  const dirFull = c.windDir ? _expandDir(c.windDir) : null;
+  const windStr = dirFull ? `💨 ${c.windKmph} km/h hacia el ${dirFull}` : `💨 ${c.windKmph} km/h`;
 
   const lines = [
     `*${location}* ${c.emoji}`,
     `*${c.temp}°C* — ${c.description}`,
-    `Sensación ${c.feelsLike}° · Humedad ${c.humidity}%`,
-    `${windStr}${uvStr ? ` · ${uvStr}` : ''}`,
+    `Se siente: ${c.feelsLike}° · Humedad: ${c.humidity}%`,
+    `${windStr}`,
   ];
+
+  if (uvStr) lines.push(uvStr);
 
   // Amanecer/atardecer compacto
   if (forecast.length > 0 && (forecast[0].sunrise || forecast[0].sunset)) {
     const sun = [];
-    if (forecast[0].sunrise) sun.push(`🌅 ${forecast[0].sunrise}`);
-    if (forecast[0].sunset) sun.push(`🌇 ${forecast[0].sunset}`);
+    if (forecast[0].sunrise) sun.push(`🌅 Amanece: ${forecast[0].sunrise}`);
+    if (forecast[0].sunset) sun.push(`🌇 Oscurece: ${forecast[0].sunset}`);
     lines.push(sun.join('  '));
   }
 
@@ -206,11 +225,11 @@ function formatWeatherResponse(data) {
     for (const day of forecast) {
       const isToday = day.date === _todayBogota();
       const label = isToday
-        ? 'Hoy  '
+        ? 'Hoy   '
         : new Date(day.date + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric' });
       const em = WMO_EMOJI(day.code, true);
-      const rain = day.rain >= 50 ? `  ☂️ ${day.rain}%` : day.rain >= 15 ? `  ${day.rain}% 🌧️` : '';
-      const uv = day.uvMax >= 8 ? `  ☀️${day.uvMax}` : '';
+      const rain = day.rain >= 15 ? `  ☂️ ${day.rain}% de lluvia` : '';
+      const uv = day.uvMax >= 8 ? `  (${_uvLabel(day.uvMax)})` : '';
       lines.push(`• ${label}  ${em}  ${day.maxC}° / ${day.minC}°${rain}${uv}`);
     }
   }
