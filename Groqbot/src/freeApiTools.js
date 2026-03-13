@@ -133,56 +133,93 @@ async function getWeatherForCity(cityName) {
   };
 }
 
+function _weatherTip(rainTodayPct, rainTomorrowPct, uvIndex) {
+  if (rainTodayPct >= 60) {
+    const opts = [
+      '☔ Hoy llueve — el plan perfecto es cobija, café y una buena serie.',
+      '🌧️ Paraguas obligatorio. El clima dice: quédate cómodo hoy.',
+      '🌧️ Día de lluvia — ideal para quedarse en casa con algo rico.',
+    ];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
+  if (rainTodayPct >= 30) {
+    const opts = [
+      '🌂 Posible lluvia — lleva paraguas por si acaso.',
+      '🌦️ Cielos inestables. No salgas sin sombrilla.',
+    ];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
+  if (rainTomorrowPct >= 60) {
+    return '☀️ Hoy está despejado — aprovecha antes de que llegue la lluvia mañana.';
+  }
+  if (uvIndex >= 8) {
+    const opts = [
+      '🧴 Sol fuerte hoy — protector solar antes de salir.',
+      '☀️ Buen día para salir, pero lleva protector solar.',
+    ];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
+  if (uvIndex >= 6) {
+    const opts = [
+      '😎 Buenas condiciones hoy — disfruta el día.',
+      '🌤️ Clima agradable — perfecto para salir.',
+    ];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
+  const opts = [
+    '🌿 Día tranquilo — perfecto para lo que tengas planeado.',
+    '✨ El clima acompaña hoy, disfrútalo.',
+    '🌤️ Buen día para salir.',
+  ];
+  return opts[Math.floor(Math.random() * opts.length)];
+}
+
 function formatWeatherResponse(data) {
-  const { city, region, country, current: c, forecast, timezone } = data;
-  const location = [city, region, country].filter(Boolean).join(', ');
+  const { city, region, country, current: c, forecast } = data;
 
-  // UV label
-  const uvLabel = (uv) => {
-    if (uv === null || uv === undefined) return '';
-    if (uv >= 11) return `UV ${uv} 🔴 extremo`;
-    if (uv >= 8) return `UV ${uv} ⚠️`;
-    if (uv >= 6) return `UV ${uv}`;
-    return `UV ${uv}`;
-  };
+  // Evitar redundancia tipo "Bogotá, Distrito Capital de Bogotá, Colombia"
+  const regionClean = region && !region.toLowerCase().includes(city.toLowerCase()) ? region : null;
+  const location = [city, regionClean, country].filter(Boolean).join(', ');
 
-  const windStr = c.windDir ? `${c.windKmph} km/h → ${c.windDir}` : `${c.windKmph} km/h`;
-  const cloudStr = c.cloudCover !== null ? `Nubes: ${c.cloudCover}%` : null;
-  const uvStr = c.uvIndex !== null ? uvLabel(c.uvIndex) : null;
+  const uvStr = c.uvIndex !== null
+    ? `UV ${c.uvIndex}${c.uvIndex >= 11 ? ' 🔴' : c.uvIndex >= 8 ? ' ⚠️' : ''}`
+    : null;
+  const windStr = c.windDir ? `💨 ${c.windKmph} km/h ${c.windDir}` : `💨 ${c.windKmph} km/h`;
 
   const lines = [
-    `${c.emoji} *Clima en ${location}*`,
-    `Ahora: *${c.temp}°C* — ${c.description}`,
-    `Sensación: ${c.feelsLike}°C  |  Humedad: ${c.humidity}%${cloudStr ? `  |  ${cloudStr}` : ''}`,
-    `Viento: ${windStr}${uvStr ? `  |  ${uvStr}` : ''}`,
+    `*${location}* ${c.emoji}`,
+    `*${c.temp}°C* — ${c.description}`,
+    `Sensación ${c.feelsLike}° · Humedad ${c.humidity}%`,
+    `${windStr}${uvStr ? ` · ${uvStr}` : ''}`,
   ];
 
-  // Amanecer/atardecer del día de hoy (primer elemento del forecast)
+  // Amanecer/atardecer compacto
   if (forecast.length > 0 && (forecast[0].sunrise || forecast[0].sunset)) {
     const sun = [];
-    if (forecast[0].sunrise) sun.push(`🌅 Amanecer: ${forecast[0].sunrise}`);
-    if (forecast[0].sunset) sun.push(`🌇 Atardecer: ${forecast[0].sunset}`);
-    lines.push(sun.join('  |  '));
-  }
-
-  if (c.precipitation > 0) {
-    lines.push(`Precipitación actual: ${c.precipitation} mm`);
+    if (forecast[0].sunrise) sun.push(`🌅 ${forecast[0].sunrise}`);
+    if (forecast[0].sunset) sun.push(`🌇 ${forecast[0].sunset}`);
+    lines.push(sun.join('  '));
   }
 
   if (forecast.length > 0) {
-    lines.push('', '*Pronóstico:*');
+    lines.push('', '*Pronóstico*');
     for (const day of forecast) {
       const isToday = day.date === _todayBogota();
-      const label = isToday ? 'Hoy' : new Date(day.date + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' });
+      const label = isToday
+        ? 'Hoy  '
+        : new Date(day.date + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric' });
       const em = WMO_EMOJI(day.code, true);
-      const rain = day.rain > 30 ? ` ☂️ ${day.rain}%` : day.rain > 0 ? ` (${day.rain}% lluvia)` : '';
-      const precip = day.precipSum > 0 ? ` (${day.precipSum}mm)` : '';
-      const uv = day.uvMax !== null && day.uvMax >= 6 ? `  ☀️${uvLabel(day.uvMax)}` : '';
-      lines.push(`  ${em} *${label}:* ${day.maxC}° / ${day.minC}°${rain}${precip}${uv}`);
+      const rain = day.rain >= 50 ? `  ☂️ ${day.rain}%` : day.rain >= 15 ? `  ${day.rain}% 🌧️` : '';
+      const uv = day.uvMax >= 8 ? `  ☀️${day.uvMax}` : '';
+      lines.push(`• ${label}  ${em}  ${day.maxC}° / ${day.minC}°${rain}${uv}`);
     }
   }
 
-  lines.push('', `_Fuente: Open-Meteo (sin API key)_`);
+  const rainToday = forecast[0]?.rain || 0;
+  const rainTomorrow = forecast[1]?.rain || 0;
+  const tip = _weatherTip(rainToday, rainTomorrow, c.uvIndex || 0);
+  lines.push('', `_${tip}_`);
+
   return lines.join('\n');
 }
 
