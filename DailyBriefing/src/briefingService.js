@@ -35,7 +35,7 @@ const CRYPTO_EMOJI = {
  * @returns {string} Mensaje formateado para WhatsApp
  */
 async function generateBriefing(options = {}) {
-  const { userName = '', prefs = {} } = options;
+  const { userName = '', prefs = {}, jid = null } = options;
 
   const show_weather = prefs.show_weather !== false;
   const show_trm = prefs.show_trm !== false;
@@ -61,13 +61,17 @@ async function generateBriefing(options = {}) {
     ? await getFxRates(fx_currencies).catch(() => [])
     : [];
 
-  // Gastos (opcional)
-  let gastosInfo = null;
-  try { gastosInfo = await _getGastosInfo(); } catch (_) {}
-
   // Construir mensaje
   const { DateTime } = require('luxon');
   const now = DateTime.now().setZone(process.env.TIMEZONE || 'America/Bogota');
+  const isMorning = now.hour < 12; // solo briefing 7:00
+
+  // Features nuevas + fix de gastos (paralelo)
+  const [holidayResult, motivationResult, gastosResult] = await Promise.allSettled([
+    isMorning ? _getHolidays() : Promise.resolve(null),
+    isMorning ? _getMotivationalPhrase(now.weekday) : Promise.resolve(null),
+    jid ? _getGastosSummary(jid) : Promise.resolve(null),
+  ]);
   const greeting = _getGreeting(now.hour, userName, now.weekday % 7); // luxon: 1=Mon..7=Sun → 0=Sun via mod
   const dateStr = now.toFormat("cccc d 'de' LLLL yyyy", { locale: 'es' });
 
@@ -85,6 +89,23 @@ async function generateBriefing(options = {}) {
       sections.push(weatherText);
       sections.push('');
     }
+  }
+
+  // Alerta prominente de lluvia (>60%)
+  if (show_weather) {
+    const weatherData = weatherResult.status === 'fulfilled' ? weatherResult.value : null;
+    if (weatherData && weatherData.rain_chance > 60) {
+      sections.push(`🌧️ *¡Lleva paraguas hoy!* — ${weatherData.rain_chance}% prob. de lluvia`);
+      sections.push('');
+    }
+  }
+
+  // Festivo + frase motivacional (solo 7:00)
+  if (isMorning) {
+    const holiday = holidayResult.status === 'fulfilled' ? holidayResult.value : null;
+    const motivation = motivationResult.status === 'fulfilled' ? motivationResult.value : null;
+    if (holiday) { sections.push(holiday); sections.push(''); }
+    if (motivation) { sections.push(motivation); sections.push(''); }
   }
 
   // Precios: TRM + criptos + divisas fiat
@@ -123,9 +144,10 @@ async function generateBriefing(options = {}) {
     sections.push('');
   }
 
-  // Gastos
-  if (gastosInfo) {
-    sections.push(gastosInfo);
+  // Gastos (por usuario, desde Sheets)
+  const gastosSection = gastosResult?.status === 'fulfilled' ? gastosResult.value : null;
+  if (gastosSection) {
+    sections.push(gastosSection);
     sections.push('');
   }
 
@@ -164,30 +186,77 @@ function _getGreeting(hour, userName, dayOfWeek) {
   return dayMsg ? `${timeGreeting}  ${dayMsg}` : timeGreeting;
 }
 
-async function _getGastosInfo() {
+async function _getHolidays() {
   try {
-    const { getFinancialSummary } = require('../../Gastos/src/sheets/financialSummary');
-    const summary = await getFinancialSummary();
-    if (!summary) return null;
+    const { getPublicHolidays } = require('../../Groqbot/src/freeApiTools');
+    const { DateTime } = require('luxon');
+    const tz = process.env.TIMEZONE || 'America/Bogota';
+    const now = DateTime.now().setZone(tz);
+    const todayStr = now.toFormat('yyyy-MM-dd');
+    const { holidays } = await getPublicHolidays('CO');
+    if (!holidays || holidays.length === 0) return null;
 
-    const { formatCOP } = require('../../Gastos/src/utils/formatCurrency');
-    const lines = ['💰 *Finanzas del mes*'];
+    const todayHoliday = holidays.find(h => h.date === todayStr);
+    if (todayHoliday) return `🎉 *¡Hoy es festivo!* — ${todayHoliday.localName || todayHoliday.name}`;
 
-    if (summary.totalGastos !== undefined) {
-      lines.push(`Gastos: *${formatCOP(summary.totalGastos)}*`);
+    for (let i = 1; i <= 3; i++) {
+      const checkDate = now.plus({ days: i }).toFormat('yyyy-MM-dd');
+      const upcoming = holidays.find(h => h.date === checkDate);
+      if (upcoming) {
+        const label = i === 1 ? 'mañana' : `en ${i} días`;
+        const dayName = DateTime.fromISO(upcoming.date, { zone: tz })
+          .setLocale('es').toFormat("cccc d 'de' LLLL");
+        return `📅 *Festivo ${label}* — ${upcoming.localName || upcoming.name} (${dayName})`;
+      }
     }
-    if (summary.presupuesto) {
-      const pct = Math.round((summary.totalGastos / summary.presupuesto) * 100);
-      lines.push(`Presupuesto: ${formatCOP(summary.totalGastos)} / ${formatCOP(summary.presupuesto)} (${pct}%)`);
-    }
-    if (summary.saldo !== undefined) {
-      lines.push(`Saldo: *${formatCOP(summary.saldo)}*`);
-    }
-
-    return lines.join('\n');
-  } catch (_) {
     return null;
-  }
+  } catch (_) { return null; }
+}
+
+async function _getMotivationalPhrase(weekday) {
+  try {
+    const Groq = require('groq-sdk');
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const dayNames = ['', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+    const contextHints = {
+      1: 'inicio de semana laboral', 2: 'segundo día de semana',
+      3: 'mitad de semana', 4: 'penúltimo día laboral',
+      5: 'viernes, cierre semana', 6: 'sábado libre', 7: 'domingo de recarga',
+    };
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      messages: [
+        { role: 'system', content: 'Responde SOLO con la frase, sin explicaciones. Español colombiano informal. Máximo 20 palabras.' },
+        { role: 'user', content: `Frase motivacional única para el ${dayNames[weekday]} (${contextHints[weekday] || 'día especial'}). Que no sea cliché.` },
+      ],
+      max_tokens: 60,
+      temperature: 0.9,
+    });
+    const phrase = completion.choices[0]?.message?.content?.trim();
+    return phrase ? `✨ _${phrase}_` : null;
+  } catch (_) { return null; }
+}
+
+async function _getGastosSummary(jid) {
+  try {
+    const { getGastosData } = require('../../src/gastosDb');
+    const gastosData = await getGastosData(jid);
+    if (!gastosData || gastosData.onboarding_step !== 'complete') return null;
+    const sheetId = gastosData.sheet_id;
+    if (!sheetId) return null;
+    if (!parseFloat(gastosData.config?.salary)) return null;
+
+    const { setCurrentSpreadsheetId } = require('../../Gastos/src/sheets/sheetsClient');
+    const { getFinancialSummary } = require('../../Gastos/src/sheets/financialSummary');
+    setCurrentSpreadsheetId(sheetId);
+    const summary = await getFinancialSummary();
+    if (!summary || typeof summary !== 'string') return null;
+
+    // Recortar antes de "Gastos por categoría" para mantener el briefing corto
+    const cutIdx = summary.indexOf('Gastos por categoría');
+    const brief = cutIdx > 0 ? summary.slice(0, cutIdx).trim() : summary.trim();
+    return brief ? `💰 *Finanzas del mes*\n${brief}` : null;
+  } catch (_) { return null; }
 }
 
 module.exports = { generateBriefing, CRYPTO_EMOJI, FX_EMOJI, FX_NAME };

@@ -55,7 +55,7 @@ async function _sendBriefingAtHour(sock, hour) {
       if (!Array.isArray(prefs.briefing_times) || !prefs.briefing_times.includes(hour)) continue;
 
       try {
-        const msg = await generateBriefing({ userName: contact.name || '', prefs });
+        const msg = await generateBriefing({ userName: contact.name || '', prefs, jid: contact.jid });
         await sock.sendMessage(contact.jid, { text: PREFIX + msg });
         sent++;
         // Rate limiting entre usuarios para evitar spam
@@ -111,7 +111,7 @@ async function sendBriefingNow(sock, jid) {
   const { getPrefs } = require('../../src/prefsDb');
   const prefs = await getPrefs(jid);
   const userName = sock.user?.name || '';
-  const message = await generateBriefing({ userName, prefs });
+  const message = await generateBriefing({ userName, prefs, jid });
   await sock.sendMessage(jid, { text: PREFIX + message });
 }
 
