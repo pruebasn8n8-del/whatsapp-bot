@@ -103,13 +103,13 @@ function postJson(path, body) {
   });
 }
 
-async function screenshot({ url, width = 1280, height = 800, fullPage = false, selector } = {}) {
+async function screenshot({ url, width = 1280, height = 800, fullPage = false, selector, waitMs, timeout } = {}) {
   if (!WORKER_URL) {
     console.error('[Screenshot] SCREENSHOT_WORKER_URL no configurado');
     return null;
   }
   try {
-    const buf = await postJson('/screenshot', { url, width, height, fullPage, selector });
+    const buf = await postJson('/screenshot', { url, width, height, fullPage, selector, waitMs, timeout });
     console.log('[Screenshot] Captura genérica del worker para:', url);
     return buf;
   } catch (err) {

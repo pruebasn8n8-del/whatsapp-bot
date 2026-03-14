@@ -1234,7 +1234,7 @@ async function handleGroqMessage(msg, sock, groqService) {
         typingInterval = _startPersistentTyping(sock, jid);
         try {
           await _reactToMessage(sock, msg, "📊");
-          const imgBuf = await _screenshotGeneric({ url: tvUrl, width: 900, height: 500, fullPage: false });
+          const imgBuf = await _screenshotGeneric({ url: tvUrl, width: 900, height: 500, fullPage: false, waitMs: 3000 });
           _stopPersistentTyping(typingInterval); typingInterval = null;
           if (!imgBuf) {
             await _sendText(sock, jid, `No pude generar la gráfica para *${sym}*. Intenta con otro símbolo.`);
@@ -1744,7 +1744,7 @@ async function handleGroqMessage(msg, sock, groqService) {
               typingInterval = _startPersistentTyping(sock, jid);
               try {
                 const tvUrl = `https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=${encodeURIComponent(tvSym)}&interval=D&theme=dark&style=1&locale=es&enable_publishing=false&hide_top_toolbar=true`;
-                const imgBuf = await _screenshotGeneric({ url: tvUrl, width: 900, height: 500 });
+                const imgBuf = await _screenshotGeneric({ url: tvUrl, width: 900, height: 500, waitMs: 3000 });
                 _stopPersistentTyping(typingInterval); typingInterval = null;
                 if (imgBuf) {
                   await sock.sendMessage(jid, {
@@ -1806,7 +1806,7 @@ async function handleGroqMessage(msg, sock, groqService) {
         typingInterval = _startPersistentTyping(sock, jid);
         let imgBuf = null;
         try {
-          imgBuf = await _screenshotGeneric({ url: previewUrl, width: 1280, height: 800, fullPage: false });
+          imgBuf = await _screenshotGeneric({ url: previewUrl, width: 1280, height: 800, fullPage: false, waitMs: 500, timeout: 15000 });
         } catch (ssErr) {
           console.log('[LinkPreview] Screenshot falló:', ssErr.message);
         }

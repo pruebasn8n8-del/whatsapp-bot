@@ -27,10 +27,10 @@ app.get('/screenshot/sab', async (req, res) => {
 });
 
 app.post('/screenshot', async (req, res) => {
-  const { url, width, height, fullPage, selector } = req.body || {};
+  const { url, width, height, fullPage, selector, waitMs, timeout } = req.body || {};
   if (!url) return res.status(400).json({ error: 'url requerida' });
   try {
-    const buf = await genericScreenshot({ url, width, height, fullPage, selector });
+    const buf = await genericScreenshot({ url, width, height, fullPage, selector, waitMs, timeout });
     res.set('Content-Type', 'image/jpeg').send(buf);
   } catch (err) {
     console.error('[Worker] Error en /screenshot:', err.message);

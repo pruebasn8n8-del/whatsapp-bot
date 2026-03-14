@@ -18,18 +18,56 @@ const BLOCKED_TYPES = new Set(['font', 'media', 'other']);
 const BLOCKED_PATTERNS = [/google-analytics/, /googletagmanager/, /facebook/, /doubleclick/];
 
 let _browser = null;
+const PAGE_POOL = [];
+const PAGE_POOL_MAX = 2;
 
 async function _getBrowser() {
   if (_browser) {
-    try { await _browser.version(); return _browser; } catch (_) { _browser = null; }
+    try { await _browser.version(); return _browser; } catch (_) {
+      _browser = null;
+      PAGE_POOL.length = 0; // flush pool — pages belong to old browser
+    }
   }
   _browser = await puppeteer.launch({
     executablePath: CHROMIUM_PATH,
     args: LAUNCH_ARGS,
     headless: true,
   });
-  _browser.on('disconnected', () => { _browser = null; });
+  _browser.on('disconnected', () => { _browser = null; PAGE_POOL.length = 0; });
   return _browser;
+}
+
+async function _createPoolPage(browser) {
+  const page = await browser.newPage();
+  await page.setRequestInterception(true);
+  page.on('request', req => {
+    if (BLOCKED_TYPES.has(req.resourceType()) || BLOCKED_PATTERNS.some(p => p.test(req.url()))) {
+      req.abort();
+    } else {
+      req.continue();
+    }
+  });
+  return page;
+}
+
+async function _getPage() {
+  if (PAGE_POOL.length > 0) {
+    console.log('[Screenshot] Pool: using existing page');
+    return PAGE_POOL.shift();
+  }
+  const browser = await _getBrowser();
+  return _createPoolPage(browser);
+}
+
+async function _releasePage(page) {
+  try {
+    await page.goto('about:blank', { waitUntil: 'load', timeout: 3000 });
+    if (PAGE_POOL.length < PAGE_POOL_MAX) {
+      PAGE_POOL.push(page);
+      return;
+    }
+  } catch (_) {}
+  try { await page.close(); } catch (_) {}
 }
 
 let _cache = null;
@@ -64,7 +102,13 @@ async function getSabScreenshot() {
 }
 
 _getBrowser()
-  .then(() => getSabScreenshot())
+  .then(async (browser) => {
+    for (let i = 0; i < PAGE_POOL_MAX; i++) {
+      try { PAGE_POOL.push(await _createPoolPage(browser)); } catch (_) {}
+    }
+    console.log(`[Screenshot] Pool pre-calentado: ${PAGE_POOL.length} páginas listas`);
+    return getSabScreenshot();
+  })
   .then(() => console.log('[Screenshot] Cache inicial listo'))
   .catch(e => console.log('[Screenshot] Precalentamiento falló:', e.message));
 
@@ -72,24 +116,15 @@ setInterval(() => {
   getSabScreenshot().catch(e => console.log('[Screenshot] Refresh falló:', e.message));
 }, CACHE_TTL_MS);
 
-// options: { url, width=1280, height=800, fullPage=false, selector=null }
-async function genericScreenshot({ url, width = 1280, height = 800, fullPage = false, selector = null } = {}) {
+// options: { url, width=1280, height=800, fullPage=false, selector=null, waitMs=500, timeout=15000 }
+async function genericScreenshot({ url, width = 1280, height = 800, fullPage = false, selector = null, waitMs = 500, timeout = 15000 } = {}) {
   if (!url) throw new Error('url requerida');
-  const browser = await _getBrowser();
-  const page = await browser.newPage();
+  const page = await _getPage();
   try {
     await page.setUserAgent(USER_AGENT);
-    await page.setRequestInterception(true);
-    page.on('request', req => {
-      if (BLOCKED_TYPES.has(req.resourceType()) || BLOCKED_PATTERNS.some(p => p.test(req.url()))) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
     await page.setViewport({ width, height });
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
     } catch (e) {
       if (e.message && e.message.includes('timeout')) {
         console.log('[Screenshot] domcontentloaded timeout — tomando screenshot de lo que cargó');
@@ -98,7 +133,7 @@ async function genericScreenshot({ url, width = 1280, height = 800, fullPage = f
       }
     }
     // Espera que JS (TradingView, Chart.js, etc.) termine de renderizar
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, waitMs));
     if (selector) {
       await page.waitForSelector(selector, { timeout: 10000 });
       const el = await page.$(selector);
@@ -107,7 +142,7 @@ async function genericScreenshot({ url, width = 1280, height = 800, fullPage = f
     }
     return await page.screenshot({ type: 'jpeg', quality: 85, fullPage });
   } finally {
-    await page.close();
+    await _releasePage(page);
   }
 }
 
