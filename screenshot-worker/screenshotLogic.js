@@ -83,9 +83,9 @@ async function genericScreenshot({ url, width = 1280, height = 800, fullPage = f
       }
     });
     await page.setViewport({ width, height });
-    await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     // Espera que JS (TradingView, Chart.js, etc.) termine de renderizar
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 5000));
     if (selector) {
       await page.waitForSelector(selector, { timeout: 10000 });
       const el = await page.$(selector);
