@@ -379,6 +379,19 @@ function startKeepAlive() {
     setInterval(doPing, PING_INTERVAL_MS);
   }, 30000);
 
+  // Mantener vivo el screenshot-worker también
+  const workerUrl = process.env.SCREENSHOT_WORKER_URL;
+  if (workerUrl) {
+    const workerPingUrl = workerUrl.replace(/\/$/, '') + '/health';
+    setInterval(() => {
+      const _https = require('https');
+      const _http = require('http');
+      const mod = workerPingUrl.startsWith('https') ? _https : _http;
+      mod.get(workerPingUrl, { timeout: 10000 }, () => {}).on('error', () => {});
+    }, PING_INTERVAL_MS);
+    console.log('[KeepAlive] También pinging worker en', workerPingUrl);
+  }
+
   console.log('[KeepAlive] Iniciado - pinging', pingUrl, 'cada 4 minutos');
 }
 
