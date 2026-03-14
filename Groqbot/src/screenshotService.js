@@ -12,8 +12,8 @@ async function takeScreenshot(url = SAB_URL) {
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 2000)); // esperar render del mapa
+    await page.goto(url, { waitUntil: 'load', timeout: 45000 });
+    await new Promise(r => setTimeout(r, 5000)); // esperar render del mapa (tiles JS)
     const buffer = await page.screenshot({ type: 'jpeg', quality: 85 });
     return buffer;
   } finally {
