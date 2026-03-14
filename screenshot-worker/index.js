@@ -1,7 +1,8 @@
 const express = require('express');
-const { getSabScreenshot } = require('./screenshotLogic');
+const { getSabScreenshot, genericScreenshot, scrapePage } = require('./screenshotLogic');
 
 const app = express();
+app.use(express.json());
 const WORKER_SECRET = process.env.WORKER_SECRET;
 
 app.use((req, res, next) => {
@@ -22,6 +23,30 @@ app.get('/screenshot/sab', async (req, res) => {
   } catch (err) {
     console.error('[Worker] Error en /screenshot/sab:', err.message);
     res.status(503).end();
+  }
+});
+
+app.post('/screenshot', async (req, res) => {
+  const { url, width, height, fullPage, selector } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'url requerida' });
+  try {
+    const buf = await genericScreenshot({ url, width, height, fullPage, selector });
+    res.set('Content-Type', 'image/jpeg').send(buf);
+  } catch (err) {
+    console.error('[Worker] Error en /screenshot:', err.message);
+    res.status(503).json({ error: err.message });
+  }
+});
+
+app.post('/scrape', async (req, res) => {
+  const { url, selector, waitFor } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'url requerida' });
+  try {
+    const result = await scrapePage({ url, selector, waitFor });
+    res.json(result);
+  } catch (err) {
+    console.error('[Worker] Error en /scrape:', err.message);
+    res.status(503).json({ error: err.message });
   }
 });
 
