@@ -49,8 +49,7 @@ async function getSabScreenshot() {
     });
 
     await page.setViewport({ width: 1280, height: 800 });
-    await page.goto(SAB_URL, { waitUntil: 'load', timeout: 45000 });
-    await new Promise(r => setTimeout(r, 3000));
+    await page.goto(SAB_URL, { waitUntil: 'networkidle0', timeout: 45000 });
     const buffer = await page.screenshot({ type: 'jpeg', quality: 85 });
 
     _cache = { buffer, ts: Date.now() };
