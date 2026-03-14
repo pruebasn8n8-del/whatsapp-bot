@@ -1,4 +1,6 @@
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 
 const SAB_URL = 'https://app.sab.gov.co/sab/lluvias.htm';
 const CHROMIUM_PATH = process.env.CHROMIUM_PATH || '/usr/bin/chromium';
@@ -8,7 +10,9 @@ const LAUNCH_ARGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
+  '--disable-blink-features=AutomationControlled',
 ];
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 const BLOCKED_TYPES = new Set(['font', 'media', 'other']);
 const BLOCKED_PATTERNS = [/google-analytics/, /googletagmanager/, /facebook/, /doubleclick/];
@@ -74,6 +78,7 @@ async function genericScreenshot({ url, width = 1280, height = 800, fullPage = f
   const browser = await _getBrowser();
   const page = await browser.newPage();
   try {
+    await page.setUserAgent(USER_AGENT);
     await page.setRequestInterception(true);
     page.on('request', req => {
       if (BLOCKED_TYPES.has(req.resourceType()) || BLOCKED_PATTERNS.some(p => p.test(req.url()))) {
@@ -104,6 +109,7 @@ async function scrapePage({ url, selector = 'body', waitFor = 0 } = {}) {
   const browser = await _getBrowser();
   const page = await browser.newPage();
   try {
+    await page.setUserAgent(USER_AGENT);
     await page.setRequestInterception(true);
     page.on('request', req => {
       if (BLOCKED_TYPES.has(req.resourceType()) || BLOCKED_PATTERNS.some(p => p.test(req.url()))) {
@@ -113,7 +119,7 @@ async function scrapePage({ url, selector = 'body', waitFor = 0 } = {}) {
       }
     });
     await page.setViewport({ width: 1280, height: 800 });
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     if (waitFor > 0) await new Promise(r => setTimeout(r, Math.min(waitFor, 10000)));
     await page.waitForSelector(selector, { timeout: 10000 });
     const result = await page.evaluate((sel) => {
