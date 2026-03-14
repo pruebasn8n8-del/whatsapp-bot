@@ -1,63 +1,79 @@
-// screenshotService.js — cliente HTTP del screenshot-worker (sin Puppeteer/Chromium local)
-const https = require('https');
-const http = require('http');
+const puppeteer = require('puppeteer-core');
 
-const WORKER_URL = process.env.SCREENSHOT_WORKER_URL;
-const WORKER_SECRET = process.env.WORKER_SECRET;
+const SAB_URL = 'https://app.sab.gov.co/sab/lluvias.htm';
+const CHROMIUM_PATH = process.env.CHROMIUM_PATH || '/usr/bin/chromium';
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
 
-let _cache = null; // { buffer, ts }
+const LAUNCH_ARGS = [
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+];
 
-function fetchBuffer(url) {
-  return new Promise((resolve, reject) => {
-    const mod = url.startsWith('https') ? https : http;
-    const options = {
-      timeout: 30000,
-      headers: WORKER_SECRET ? { 'x-worker-key': WORKER_SECRET } : {},
-    };
-    const req = mod.get(url, options, (res) => {
-      if (res.statusCode !== 200) {
-        res.resume();
-        return reject(new Error(`Worker respondió ${res.statusCode}`));
-      }
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout conectando al worker')); });
+// Recursos que no aportan al mapa — bloquearlos acelera la carga
+const BLOCKED_TYPES = new Set(['font', 'media', 'other']);
+const BLOCKED_PATTERNS = [/google-analytics/, /googletagmanager/, /facebook/, /doubleclick/];
+
+// Browser persistente
+let _browser = null;
+
+async function _getBrowser() {
+  if (_browser) {
+    try { await _browser.version(); return _browser; } catch (_) { _browser = null; }
+  }
+  _browser = await puppeteer.launch({
+    executablePath: CHROMIUM_PATH,
+    args: LAUNCH_ARGS,
+    headless: true,
   });
+  _browser.on('disconnected', () => { _browser = null; });
+  return _browser;
 }
 
-async function getSabScreenshot() {
+// Cache simple en memoria
+let _cache = null; // { buffer, ts }
+
+async function takeScreenshot(url = SAB_URL) {
+  // Devolver cache si es reciente
   if (_cache && Date.now() - _cache.ts < CACHE_TTL_MS) {
     console.log('[Screenshot] Cache hit');
     return _cache.buffer;
   }
 
-  if (!WORKER_URL) {
-    console.error('[Screenshot] SCREENSHOT_WORKER_URL no configurado');
-    return null;
-  }
-
+  const browser = await _getBrowser();
+  const page = await browser.newPage();
   try {
-    const buffer = await fetchBuffer(WORKER_URL.replace(/\/$/, '') + '/screenshot/sab');
+    // Bloquear recursos innecesarios
+    await page.setRequestInterception(true);
+    page.on('request', req => {
+      if (BLOCKED_TYPES.has(req.resourceType()) || BLOCKED_PATTERNS.some(p => p.test(req.url()))) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.goto(url, { waitUntil: 'load', timeout: 45000 });
+    await new Promise(r => setTimeout(r, 3000)); // esperar render del mapa
+    const buffer = await page.screenshot({ type: 'jpeg', quality: 85 });
+
     _cache = { buffer, ts: Date.now() };
-    console.log('[Screenshot] Captura recibida del worker');
     return buffer;
-  } catch (err) {
-    console.error('[Screenshot] Error al contactar worker:', err.message);
-    // Retornar cache expirado si existe (mejor que nada)
-    return _cache ? _cache.buffer : null;
+  } finally {
+    await page.close();
   }
 }
 
-// Compatibilidad: el caller usaba takeScreenshot
-const takeScreenshot = getSabScreenshot;
+// Precalentar browser + primera captura al iniciar
+_getBrowser()
+  .then(() => takeScreenshot())
+  .then(() => console.log('[Screenshot] Cache inicial listo'))
+  .catch(e => console.log('[Screenshot] Precalentamiento falló:', e.message));
 
 // Refrescar cache cada 5 minutos en background
 setInterval(() => {
-  getSabScreenshot().catch(e => console.log('[Screenshot] Refresh falló:', e.message));
+  takeScreenshot().catch(e => console.log('[Screenshot] Refresh falló:', e.message));
 }, CACHE_TTL_MS);
 
-module.exports = { takeScreenshot, getSabScreenshot };
+module.exports = { takeScreenshot, SAB_URL };
