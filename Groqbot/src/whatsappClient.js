@@ -296,6 +296,54 @@ async function _fetchUrlContent(url) {
 }
 
 /**
+ * Extrae texto legible + título de una página web (fetch nativo, sin Puppeteer).
+ */
+async function _fetchUrlMeta(url) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
+        "Accept-Encoding": "identity",
+      },
+      signal: controller.signal,
+      redirect: "follow",
+    });
+    clearTimeout(timeout);
+    if (!response.ok) return null;
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("text/html") && !contentType.includes("text/plain")) return null;
+    const html = await response.text();
+    // Extraer título
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const title = titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim().substring(0, 100) : null;
+    // Limpiar texto
+    let text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+      .replace(/<footer[\s\S]*?<\/footer>/gi, "")
+      .replace(/<header[\s\S]*?<\/header>/gi, "")
+      .replace(/<\/?(p|br|div|h[1-6]|li|tr)[^>]*>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/  +/g, " ")
+      .trim();
+    if (text.length > 6000) text = text.substring(0, 6000) + "... (contenido truncado)";
+    return { text: text.length > 50 ? text : null, title };
+  } catch (e) {
+    console.log("[Groq] _fetchUrlMeta error:", e.message);
+    return null;
+  }
+}
+
+/**
  * Extrae contexto del mensaje citado (reply) en Baileys.
  */
 function _getQuotedContext(msg) {
@@ -1724,41 +1772,19 @@ async function handleGroqMessage(msg, sock, groqService) {
       contextParts.push(quotedContext);
     }
 
-    // Link preview automático: si el mensaje es solo una URL, screenshot + resumen (para todos, sin activar nada)
+    // Link preview automático: si el mensaje es solo una URL, resumen rápido + screenshot (para todos, sin activar nada)
     if (userMessage && /^https?:\/\/\S+$/.test(userMessage.trim())) {
       const previewUrl = userMessage.trim();
       typingInterval = _startPersistentTyping(sock, jid);
       try {
-        // 1) Scrape primero para detectar bloqueo antes de gastar tiempo en screenshot
-        const scraped = await _scrapeUrl({ url: previewUrl });
-        let title = previewUrl;
-        if (scraped && scraped.html) {
-          const titleMatch = scraped.html.match(/<title[^>]*>([^<]+)<\/title>/i);
-          if (titleMatch) title = titleMatch[1].replace(/\s+/g, ' ').trim().substring(0, 100);
-        }
-        // Detectar bloqueo de bot (Cloudflare, Akamai, etc.)
-        const isBlocked = scraped && scraped.text && (
-          /cloudflare/i.test(scraped.text) ||
-          /ray\s*id/i.test(scraped.text) ||
-          /access denied/i.test(scraped.text) ||
-          /error\s+10[12][05]/i.test(scraped.text) ||
-          /verificando\s+que\s+eres\s+humano/i.test(scraped.text) ||
-          /checking\s+if\s+the\s+site\s+connection/i.test(scraped.text) ||
-          /blocked\s+your\s+access/i.test(scraped.text) ||
-          /bot\s+protection/i.test(scraped.text) ||
-          (/captcha/i.test(scraped.text) && scraped.text.trim().length < 1000)
-        );
-        if (isBlocked) {
-          _stopPersistentTyping(typingInterval); typingInterval = null;
-          await _sendText(sock, jid, `⚠️ El sitio bloqueó el acceso al bot (protección anti-bots/Cloudflare). No puedo leer ni capturar esta página.`);
-          return;
-        }
-        // 2) Resumen del contenido
+        // 1) Fetch ligero para contenido + título (sin Puppeteer, ~15s max)
+        const meta = await _fetchUrlMeta(previewUrl);
+        const title = (meta && meta.title) || previewUrl;
         let summarySent = false;
-        if (scraped && scraped.text && scraped.text.trim().length > 80) {
-          const truncated = scraped.text.length > 6000 ? scraped.text.substring(0, 6000) + '... (truncado)' : scraped.text;
+
+        if (meta && meta.text && meta.text.trim().length > 80) {
           _reactToMessage(sock, msg, '🤔');
-          const summary = await groqService.chat(chatId, `Resumí brevemente este contenido web de ${previewUrl}:\n\n${truncated}`);
+          const summary = await groqService.chat(chatId, `Resumí brevemente este contenido web de ${previewUrl}:\n\n${meta.text}`);
           _stopPersistentTyping(typingInterval); typingInterval = null;
           const sentMsg = await sock.sendMessage(jid, { text: _botPrefix + _formatForWhatsApp(summary) });
           if (sentMsg) _trackSentMessage(jid, sentMsg);
@@ -1767,10 +1793,20 @@ async function handleGroqMessage(msg, sock, groqService) {
         } else {
           _stopPersistentTyping(typingInterval); typingInterval = null;
         }
-        // 3) Screenshot después del resumen
+
+        // 2) Avisar antes del screenshot
+        await _sendText(sock, jid, '⏳ Espera un momento, estoy tomando una captura del sitio...');
+
+        // 3) Screenshot (Puppeteer, puede tardar o fallar)
         typingInterval = _startPersistentTyping(sock, jid);
-        const imgBuf = await _screenshotGeneric({ url: previewUrl, width: 1280, height: 800, fullPage: false });
+        let imgBuf = null;
+        try {
+          imgBuf = await _screenshotGeneric({ url: previewUrl, width: 1280, height: 800, fullPage: false });
+        } catch (ssErr) {
+          console.log('[LinkPreview] Screenshot falló:', ssErr.message);
+        }
         _stopPersistentTyping(typingInterval); typingInterval = null;
+
         if (imgBuf) {
           await sock.sendMessage(jid, {
             image: imgBuf,
@@ -1779,6 +1815,7 @@ async function handleGroqMessage(msg, sock, groqService) {
         } else {
           console.log('[LinkPreview] Screenshot retornó null para:', previewUrl);
         }
+
         if (summarySent || imgBuf) return;
       } catch (e) {
         console.log('[LinkPreview] Error:', e.message);
