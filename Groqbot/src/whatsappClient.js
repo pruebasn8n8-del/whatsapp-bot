@@ -1727,38 +1727,61 @@ async function handleGroqMessage(msg, sock, groqService) {
     // Link preview automático: si el mensaje es solo una URL, screenshot + resumen (para todos, sin activar nada)
     if (userMessage && /^https?:\/\/\S+$/.test(userMessage.trim())) {
       const previewUrl = userMessage.trim();
-      await _sendText(sock, jid, `📸 Tomando screenshot de la página, un momento...`);
       typingInterval = _startPersistentTyping(sock, jid);
       try {
-        const [imgBuf, scraped] = await Promise.all([
-          _screenshotGeneric({ url: previewUrl, width: 1280, height: 800, fullPage: false }),
-          _scrapeUrl({ url: previewUrl }),
-        ]);
-        _stopPersistentTyping(typingInterval); typingInterval = null;
+        // 1) Scrape primero para detectar bloqueo antes de gastar tiempo en screenshot
+        const scraped = await _scrapeUrl({ url: previewUrl });
         let title = previewUrl;
         if (scraped && scraped.html) {
           const titleMatch = scraped.html.match(/<title[^>]*>([^<]+)<\/title>/i);
           if (titleMatch) title = titleMatch[1].replace(/\s+/g, ' ').trim().substring(0, 100);
         }
-        if (imgBuf) {
-          await sock.sendMessage(jid, {
-            image: imgBuf,
-            caption: _botPrefix + `*${title}*\n${previewUrl}`,
-          });
+        // Detectar bloqueo de bot (Cloudflare, Akamai, etc.)
+        const isBlocked = scraped && scraped.text && (
+          /cloudflare/i.test(scraped.text) ||
+          /ray\s*id/i.test(scraped.text) ||
+          /access denied/i.test(scraped.text) ||
+          /error\s+10[12][05]/i.test(scraped.text) ||
+          /verificando\s+que\s+eres\s+humano/i.test(scraped.text) ||
+          /checking\s+if\s+the\s+site\s+connection/i.test(scraped.text) ||
+          /blocked\s+your\s+access/i.test(scraped.text) ||
+          /bot\s+protection/i.test(scraped.text) ||
+          (/captcha/i.test(scraped.text) && scraped.text.trim().length < 1000)
+        );
+        if (isBlocked) {
+          _stopPersistentTyping(typingInterval); typingInterval = null;
+          await _sendText(sock, jid, `⚠️ El sitio bloqueó el acceso al bot (protección anti-bots/Cloudflare). No puedo leer ni capturar esta página.`);
+          return;
         }
+        // 2) Resumen del contenido
+        let summarySent = false;
         if (scraped && scraped.text && scraped.text.trim().length > 80) {
           const truncated = scraped.text.length > 6000 ? scraped.text.substring(0, 6000) + '... (truncado)' : scraped.text;
           _reactToMessage(sock, msg, '🤔');
-          typingInterval = _startPersistentTyping(sock, jid);
           const summary = await groqService.chat(chatId, `Resumí brevemente este contenido web de ${previewUrl}:\n\n${truncated}`);
           _stopPersistentTyping(typingInterval); typingInterval = null;
           const sentMsg = await sock.sendMessage(jid, { text: _botPrefix + _formatForWhatsApp(summary) });
           if (sentMsg) _trackSentMessage(jid, sentMsg);
           _reactToMessage(sock, msg, '');
+          summarySent = true;
+        } else {
+          _stopPersistentTyping(typingInterval); typingInterval = null;
         }
-        // Si al menos se envió algo (screen o resumen), terminar. Si ambos fallaron, caer a Groq normal.
-        if (imgBuf || (scraped && scraped.text && scraped.text.trim().length > 80)) return;
-      } catch (_) {
+        // 3) Screenshot después del resumen
+        typingInterval = _startPersistentTyping(sock, jid);
+        const imgBuf = await _screenshotGeneric({ url: previewUrl, width: 1280, height: 800, fullPage: false });
+        _stopPersistentTyping(typingInterval); typingInterval = null;
+        if (imgBuf) {
+          await sock.sendMessage(jid, {
+            image: imgBuf,
+            caption: _botPrefix + `*${title}*\n${previewUrl}`,
+          });
+        } else {
+          console.log('[LinkPreview] Screenshot retornó null para:', previewUrl);
+        }
+        if (summarySent || imgBuf) return;
+      } catch (e) {
+        console.log('[LinkPreview] Error:', e.message);
         _stopPersistentTyping(typingInterval); typingInterval = null;
         // Fallo silencioso — Groq responde normalmente abajo
       }
