@@ -125,4 +125,18 @@ async function scrapePage({ url, selector = 'body', waitFor = 0 } = {}) {
   }
 }
 
-module.exports = { getSabScreenshot, genericScreenshot, scrapePage };
+// html: string con HTML completo a convertir a PDF
+async function generatePdf(html) {
+  if (!html) throw new Error('html requerido');
+  const browser = await _getBrowser();
+  const page = await browser.newPage();
+  try {
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
+    const pdf = await page.pdf({ format: 'A4', printBackground: true });
+    return pdf;
+  } finally {
+    await page.close();
+  }
+}
+
+module.exports = { getSabScreenshot, genericScreenshot, scrapePage, generatePdf };

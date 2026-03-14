@@ -6,7 +6,7 @@ const { exec } = require("child_process");
 const { promisify } = require("util");
 const execAsync = promisify(exec);
 const GroqService = require("./groqService");
-const { takeScreenshot } = require("./screenshotService");
+const { takeScreenshot, screenshot: _screenshotGeneric, scrape: _scrapeUrl } = require("./screenshotService");
 const { getTRM, getCryptoPrice, searchCrypto, formatUSD, formatCOP: formatCOPPrice, formatChangeArrow } = require("./priceService");
 const { getMessageText, getInteractiveResponse, sendListMessage, sendButtonMessage, unwrapMessage } = require("../../src/messageUtils");
 
@@ -902,6 +902,8 @@ async function handleGroqMessage(msg, sock, groqService) {
           "🔍 *Búsqueda y datos en tiempo real*",
           "  Clima, sismos, festivos — automático al preguntar",
           "  /buscar _consulta_  — Búsqueda web explícita",
+          "  /web _url_  — Resumir cualquier página web",
+          "  /chart _BTC|ETH|AAPL..._  — Gráfica TradingView",
           "  /clima _ciudad_  — Clima + pronóstico 3 días",
           "  URLs  — Leo y analizo páginas",
           "  Docs  — Analizo PDF, TXT, CSV",
@@ -1125,6 +1127,82 @@ async function handleGroqMessage(msg, sock, groqService) {
       }
       if (cmd === "/buscar") {
         await _sendText(sock, jid, "Uso: /buscar <consulta>\n\nEjemplos:\n• /buscar noticias colombia hoy\n• /buscar precio del dólar hoy\n• /buscar últimas noticias tecnología");
+        return;
+      }
+
+      // /web <url> - resumir página web con Groq
+      const webMatch = userMessage.match(/^\/web\s+(\S+)$/i);
+      if (webMatch) {
+        const rawUrl = webMatch[1].trim();
+        if (!/^https?:\/\//i.test(rawUrl)) {
+          await _sendText(sock, jid, "URL inválida. Ejemplo: /web https://bbc.com/news");
+          return;
+        }
+        typingInterval = _startPersistentTyping(sock, jid);
+        try {
+          await _reactToMessage(sock, msg, "🌐");
+          const scraped = await _scrapeUrl({ url: rawUrl });
+          if (!scraped || !scraped.text || scraped.text.trim().length < 50) {
+            _stopPersistentTyping(typingInterval); typingInterval = null;
+            await _sendText(sock, jid, "No pude acceder a ese sitio o la página no tiene contenido legible.");
+            return;
+          }
+          const truncated = scraped.text.length > 6000 ? scraped.text.substring(0, 6000) + "... (truncado)" : scraped.text;
+          const summary = await groqService.chat(chatId, `Resumí y analizá este contenido web de ${rawUrl}:\n\n${truncated}`);
+          _stopPersistentTyping(typingInterval); typingInterval = null;
+          await sock.sendMessage(jid, { text: _botPrefix + _formatForWhatsApp(summary) });
+        } catch (e) {
+          _stopPersistentTyping(typingInterval); typingInterval = null;
+          await _sendText(sock, jid, "No pude acceder a ese sitio: " + e.message.substring(0, 80));
+        }
+        _reactToMessage(sock, msg, "");
+        return;
+      }
+      if (cmd === "/web") {
+        await _sendText(sock, jid, "Uso: /web <url>\n\nEjemplo: /web https://bbc.com/news");
+        return;
+      }
+
+      // /chart <símbolo> - gráfica TradingView del símbolo
+      const chartMatch = userMessage.match(/^\/chart\s+(\S+)$/i);
+      if (chartMatch) {
+        const sym = chartMatch[1].toUpperCase().trim();
+        // Mapeo símbolo → TradingView
+        const TV_MAP = {
+          BTC: 'BINANCE:BTCUSDT', ETH: 'BINANCE:ETHUSDT', SOL: 'BINANCE:SOLUSDT',
+          BNB: 'BINANCE:BNBUSDT', XRP: 'BINANCE:XRPUSDT', ADA: 'BINANCE:ADAUSDT',
+          DOGE: 'BINANCE:DOGEUSDT', MATIC: 'BINANCE:MATICUSDT', AVAX: 'BINANCE:AVAXUSDT',
+          LINK: 'BINANCE:LINKUSDT', ATOM: 'BINANCE:ATOMUSDT', LTC: 'BINANCE:LTCUSDT',
+          NEAR: 'BINANCE:NEARUSDT', TON: 'BINANCE:TONUSDT', SHIB: 'BINANCE:SHIBUSDT',
+          USD: 'FX:USDCOP', EUR: 'FX:EURCOP', GBP: 'FX:GBPCOP',
+          AAPL: 'NASDAQ:AAPL', AMZN: 'NASDAQ:AMZN', GOOGL: 'NASDAQ:GOOGL',
+          MSFT: 'NASDAQ:MSFT', TSLA: 'NASDAQ:TSLA', NVDA: 'NASDAQ:NVDA',
+          META: 'NASDAQ:META', SPY: 'AMEX:SPY', QQQ: 'NASDAQ:QQQ',
+        };
+        const tvSym = TV_MAP[sym] || `BINANCE:${sym}USDT`;
+        const tvUrl = `https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=${encodeURIComponent(tvSym)}&interval=D&theme=dark&style=1&locale=es&enable_publishing=false&hide_top_toolbar=true`;
+        typingInterval = _startPersistentTyping(sock, jid);
+        try {
+          await _reactToMessage(sock, msg, "📊");
+          const imgBuf = await _screenshotGeneric({ url: tvUrl, width: 900, height: 500, fullPage: false });
+          _stopPersistentTyping(typingInterval); typingInterval = null;
+          if (!imgBuf) {
+            await _sendText(sock, jid, `No pude generar la gráfica para *${sym}*. Intenta con otro símbolo.`);
+            return;
+          }
+          await sock.sendMessage(jid, {
+            image: imgBuf,
+            caption: _botPrefix + `📊 *${sym}* — gráfica diaria\n_${tvSym}_`,
+          });
+        } catch (e) {
+          _stopPersistentTyping(typingInterval); typingInterval = null;
+          await _sendText(sock, jid, `Error generando gráfica de ${sym}: ` + e.message.substring(0, 80));
+        }
+        _reactToMessage(sock, msg, "");
+        return;
+      }
+      if (cmd === "/chart") {
+        await _sendText(sock, jid, "Uso: /chart <símbolo>\n\nEjemplos:\n• /chart BTC\n• /chart ETH\n• /chart AAPL\n• /chart TSLA\n\nCriptos: BTC ETH SOL BNB XRP ADA DOGE...\nAcciones: AAPL AMZN GOOGL MSFT TSLA NVDA META");
         return;
       }
 
@@ -1602,6 +1680,45 @@ async function handleGroqMessage(msg, sock, groqService) {
     const quotedContext = _getQuotedContext(msg);
     if (quotedContext) {
       contextParts.push(quotedContext);
+    }
+
+    // Link preview automático: si el mensaje es solo una URL, screenshot + resumen (para todos, sin activar nada)
+    if (userMessage && /^https?:\/\/\S+$/.test(userMessage.trim())) {
+      const previewUrl = userMessage.trim();
+      typingInterval = _startPersistentTyping(sock, jid);
+      try {
+        const [imgBuf, scraped] = await Promise.all([
+          _screenshotGeneric({ url: previewUrl, width: 1280, height: 800, fullPage: false }),
+          _scrapeUrl({ url: previewUrl }),
+        ]);
+        _stopPersistentTyping(typingInterval); typingInterval = null;
+        let title = previewUrl;
+        if (scraped && scraped.html) {
+          const titleMatch = scraped.html.match(/<title[^>]*>([^<]+)<\/title>/i);
+          if (titleMatch) title = titleMatch[1].replace(/\s+/g, ' ').trim().substring(0, 100);
+        }
+        if (imgBuf) {
+          await sock.sendMessage(jid, {
+            image: imgBuf,
+            caption: _botPrefix + `*${title}*\n${previewUrl}`,
+          });
+        }
+        if (scraped && scraped.text && scraped.text.trim().length > 80) {
+          const truncated = scraped.text.length > 6000 ? scraped.text.substring(0, 6000) + '... (truncado)' : scraped.text;
+          _reactToMessage(sock, msg, '🤔');
+          typingInterval = _startPersistentTyping(sock, jid);
+          const summary = await groqService.chat(chatId, `Resumí brevemente este contenido web de ${previewUrl}:\n\n${truncated}`);
+          _stopPersistentTyping(typingInterval); typingInterval = null;
+          const sentMsg = await sock.sendMessage(jid, { text: _botPrefix + _formatForWhatsApp(summary) });
+          if (sentMsg) _trackSentMessage(jid, sentMsg);
+          _reactToMessage(sock, msg, '');
+        }
+        // Si al menos se envió algo (screen o resumen), terminar. Si ambos fallaron, caer a Groq normal.
+        if (imgBuf || (scraped && scraped.text && scraped.text.trim().length > 80)) return;
+      } catch (_) {
+        _stopPersistentTyping(typingInterval); typingInterval = null;
+        // Fallo silencioso — Groq responde normalmente abajo
+      }
     }
 
     // Detectar URLs y leer contenido

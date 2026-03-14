@@ -133,4 +133,19 @@ async function scrape({ url, selector = 'body', waitFor = 0 } = {}) {
   }
 }
 
-module.exports = { takeScreenshot, getSabScreenshot, screenshot, scrape };
+async function generatePdf(html) {
+  if (!WORKER_URL) {
+    console.error('[Screenshot] SCREENSHOT_WORKER_URL no configurado');
+    return null;
+  }
+  try {
+    const buf = await postJson('/pdf', { html });
+    console.log('[Screenshot] PDF generado por worker, tamaño:', buf.length);
+    return buf;
+  } catch (err) {
+    console.error('[Screenshot] Error generando PDF:', err.message);
+    return null;
+  }
+}
+
+module.exports = { takeScreenshot, getSabScreenshot, screenshot, scrape, generatePdf };

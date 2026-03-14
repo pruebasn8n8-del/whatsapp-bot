@@ -1,5 +1,5 @@
 const express = require('express');
-const { getSabScreenshot, genericScreenshot, scrapePage } = require('./screenshotLogic');
+const { getSabScreenshot, genericScreenshot, scrapePage, generatePdf } = require('./screenshotLogic');
 
 const app = express();
 app.use(express.json());
@@ -46,6 +46,18 @@ app.post('/scrape', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[Worker] Error en /scrape:', err.message);
+    res.status(503).json({ error: err.message });
+  }
+});
+
+app.post('/pdf', async (req, res) => {
+  const { html } = req.body || {};
+  if (!html) return res.status(400).json({ error: 'html requerido' });
+  try {
+    const pdfBuffer = await generatePdf(html);
+    res.set('Content-Type', 'application/pdf').send(pdfBuffer);
+  } catch (err) {
+    console.error('[Worker] Error en /pdf:', err.message);
     res.status(503).json({ error: err.message });
   }
 });
