@@ -1784,12 +1784,17 @@ async function handleGroqMessage(msg, sock, groqService) {
 
         if (meta && meta.text && meta.text.trim().length > 80) {
           _reactToMessage(sock, msg, '🤔');
-          const summary = await groqService.chat(chatId, `Resumí brevemente este contenido web de ${previewUrl}:\n\n${meta.text}`);
+          const summary = await groqService.quickComplete(
+            'Eres un asistente que resume contenido web de forma concisa en español.',
+            `Resume brevemente el siguiente contenido de ${previewUrl}:\n\n${meta.text}`
+          );
           _stopPersistentTyping(typingInterval); typingInterval = null;
-          const sentMsg = await sock.sendMessage(jid, { text: _botPrefix + _formatForWhatsApp(summary) });
-          if (sentMsg) _trackSentMessage(jid, sentMsg);
+          if (summary) {
+            const sentMsg = await sock.sendMessage(jid, { text: _botPrefix + _formatForWhatsApp(summary) });
+            if (sentMsg) _trackSentMessage(jid, sentMsg);
+            summarySent = true;
+          }
           _reactToMessage(sock, msg, '');
-          summarySent = true;
         } else {
           _stopPersistentTyping(typingInterval); typingInterval = null;
         }
@@ -1814,6 +1819,7 @@ async function handleGroqMessage(msg, sock, groqService) {
           });
         } else {
           console.log('[LinkPreview] Screenshot retornó null para:', previewUrl);
+          await _sendText(sock, jid, '⚠️ No pude capturar el sitio (timeout o bloqueo anti-bots).');
         }
 
         if (summarySent || imgBuf) return;

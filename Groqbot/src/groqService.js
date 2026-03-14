@@ -985,6 +985,30 @@ class GroqService {
   }
 
   // ============================================
+  // Completion directa sin tool use (para resumenes internos)
+  // ============================================
+  async quickComplete(systemPrompt, userPrompt, maxTokens = 800) {
+    const messages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ];
+    try {
+      const completion = await this._withRetry(() =>
+        this.client.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          messages,
+          temperature: 0.5,
+          max_tokens: maxTokens,
+        })
+      );
+      return completion.choices[0]?.message?.content?.trim() || null;
+    } catch (e) {
+      console.log("[Groq] quickComplete error:", e.message);
+      return null;
+    }
+  }
+
+  // ============================================
   // Extraccion de memoria de conversacion
   // ============================================
   async extractMemory(userId) {
