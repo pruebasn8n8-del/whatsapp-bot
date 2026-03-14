@@ -1,0 +1,10 @@
+{
+  "name": "screenshot-worker",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "dependencies": {
+    "express": "^4.21.0",
+    "puppeteer-core": "^22.15.0"
+  }
+}
