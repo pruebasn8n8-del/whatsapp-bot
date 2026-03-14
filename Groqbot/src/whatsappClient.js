@@ -6,6 +6,7 @@ const { exec } = require("child_process");
 const { promisify } = require("util");
 const execAsync = promisify(exec);
 const GroqService = require("./groqService");
+const { takeScreenshot } = require("./screenshotService");
 const { getTRM, getCryptoPrice, searchCrypto, formatUSD, formatCOP: formatCOPPrice, formatChangeArrow } = require("./priceService");
 const { getMessageText, getInteractiveResponse, sendListMessage, sendButtonMessage, unwrapMessage } = require("../../src/messageUtils");
 
@@ -1645,6 +1646,11 @@ async function handleGroqMessage(msg, sock, groqService) {
     } else {
       const sentMsg = await sock.sendMessage(jid, { text: _botPrefix + formattedReply });
       if (sentMsg) _trackSentMessage(jid, sentMsg);
+
+      // Screenshot SAB mapa de lluvias para consultas de clima de Bogotá
+      if (formattedReply.includes('Bogotá') && formattedReply.includes('°C')) {
+        _sendSabScreenshot(sock, jid).catch(e => console.log('[Screenshot] Falló:', e.message));
+      }
     }
 
     // Remover reacción de "pensando" y confirmar envío
@@ -1674,6 +1680,18 @@ async function handleGroqMessage(msg, sock, groqService) {
       await sock.sendMessage(jid, { text: _botPrefix + "Error procesando tu mensaje: " + error.message.substring(0, 100) });
     } catch (_) {}
   }
+}
+
+// ============================================
+// Screenshot SAB mapa de lluvias
+// ============================================
+
+async function _sendSabScreenshot(sock, jid) {
+  const buf = await takeScreenshot();
+  await sock.sendMessage(jid, {
+    image: buf,
+    caption: '🌧️ *Mapa de lluvia — SAB Bogotá*',
+  });
 }
 
 // ============================================

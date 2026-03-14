@@ -3,6 +3,7 @@ FROM node:20-slim
 # ffmpeg para conversion de audio (notas de voz)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    chromium \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
