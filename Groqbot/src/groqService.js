@@ -878,6 +878,15 @@ class GroqService {
               messages.push({ role: 'tool', tool_call_id: tc.id, content: `Búsqueda falló: ${e.message}` });
             }
           } else if (callFreeApiTool) {
+            // Si el LLM llama get_weather con una ciudad que no está en el mensaje,
+            // es que la tomó del historial → forzar Bogotá
+            if (tc.function.name === 'get_weather' && args.city) {
+              const cityLower = args.city.toLowerCase();
+              if (!msgText.toLowerCase().includes(cityLower)) {
+                console.log(`[Groq] get_weather city override: "${args.city}" → Bogota (no mencionada en mensaje)`);
+                args.city = 'Bogota';
+              }
+            }
             console.log(`[Groq] free API: ${tc.function.name}`);
             this.stats.searches++;
             try {
