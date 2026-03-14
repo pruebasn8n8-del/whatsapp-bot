@@ -28,6 +28,7 @@ const GroqService = require('../Groqbot/src/groqService');
 const { setupRouter, getActiveBot } = require('./router');
 const { startScheduler } = require('../DailyBriefing/src/scheduler');
 const { startSalaryScheduler } = require('../Gastos/src/salaryScheduler');
+const { startPdfScheduler } = require('../Gastos/src/pdfScheduler');
 
 // ============================================
 // Validar configuracion
@@ -233,6 +234,7 @@ async function connectWhatsApp() {
 
       startScheduler(sock);
       startSalaryScheduler(sock);
+      startPdfScheduler(sock);
     }
   });
 

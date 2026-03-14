@@ -1138,6 +1138,7 @@ async function handleGroqMessage(msg, sock, groqService) {
           await _sendText(sock, jid, "URL inválida. Ejemplo: /web https://bbc.com/news");
           return;
         }
+        await _sendText(sock, jid, `🌐 Accediendo a la página, un momento...`);
         typingInterval = _startPersistentTyping(sock, jid);
         try {
           await _reactToMessage(sock, msg, "🌐");
@@ -1181,6 +1182,7 @@ async function handleGroqMessage(msg, sock, groqService) {
         };
         const tvSym = TV_MAP[sym] || `BINANCE:${sym}USDT`;
         const tvUrl = `https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=${encodeURIComponent(tvSym)}&interval=D&theme=dark&style=1&locale=es&enable_publishing=false&hide_top_toolbar=true`;
+        await _sendText(sock, jid, `📊 Generando gráfica de *${sym}*, un momento...`);
         typingInterval = _startPersistentTyping(sock, jid);
         try {
           await _reactToMessage(sock, msg, "📊");
@@ -1668,6 +1670,46 @@ async function handleGroqMessage(msg, sock, groqService) {
               }
             }
 
+            case 'chart': {
+              const { symbol } = intent.params;
+              const TV_MAP = {
+                BTC: 'BINANCE:BTCUSDT', ETH: 'BINANCE:ETHUSDT', SOL: 'BINANCE:SOLUSDT',
+                BNB: 'BINANCE:BNBUSDT', XRP: 'BINANCE:XRPUSDT', ADA: 'BINANCE:ADAUSDT',
+                DOGE: 'BINANCE:DOGEUSDT', MATIC: 'BINANCE:MATICUSDT', AVAX: 'BINANCE:AVAXUSDT',
+                LINK: 'BINANCE:LINKUSDT', ATOM: 'BINANCE:ATOMUSDT', LTC: 'BINANCE:LTCUSDT',
+                NEAR: 'BINANCE:NEARUSDT', TON: 'BINANCE:TONUSDT', SHIB: 'BINANCE:SHIBUSDT',
+                USD: 'FX:USDCOP', EUR: 'FX:EURCOP', GBP: 'FX:GBPCOP',
+                AAPL: 'NASDAQ:AAPL', AMZN: 'NASDAQ:AMZN', GOOGL: 'NASDAQ:GOOGL',
+                MSFT: 'NASDAQ:MSFT', TSLA: 'NASDAQ:TSLA', NVDA: 'NASDAQ:NVDA',
+                META: 'NASDAQ:META',
+              };
+              const tvSym = TV_MAP[symbol] || `BINANCE:${symbol}USDT`;
+              const isCrypto = !['USD','EUR','GBP','AAPL','AMZN','GOOGL','MSFT','TSLA','NVDA','META'].includes(symbol);
+              // Precio primero (solo criptos)
+              if (isCrypto) {
+                const { COIN_ALIASES } = require('./priceService');
+                const coinQuery = COIN_ALIASES[symbol.toLowerCase()] || symbol.toLowerCase();
+                await _handleCryptoCommand(sock, jid, coinQuery);
+              }
+              // Aviso + gráfica
+              await _sendText(sock, jid, `📊 Generando gráfica de *${symbol}*, un momento...`);
+              typingInterval = _startPersistentTyping(sock, jid);
+              try {
+                const tvUrl = `https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=${encodeURIComponent(tvSym)}&interval=D&theme=dark&style=1&locale=es&enable_publishing=false&hide_top_toolbar=true`;
+                const imgBuf = await _screenshotGeneric({ url: tvUrl, width: 900, height: 500 });
+                _stopPersistentTyping(typingInterval); typingInterval = null;
+                if (imgBuf) {
+                  await sock.sendMessage(jid, {
+                    image: imgBuf,
+                    caption: _botPrefix + `📊 *${symbol}* — gráfica diaria\n_${tvSym}_`,
+                  });
+                }
+              } catch (_) {
+                _stopPersistentTyping(typingInterval); typingInterval = null;
+              }
+              return;
+            }
+
           } // end switch
         } // end if intent
       } // end if detectFn
@@ -1685,6 +1727,7 @@ async function handleGroqMessage(msg, sock, groqService) {
     // Link preview automático: si el mensaje es solo una URL, screenshot + resumen (para todos, sin activar nada)
     if (userMessage && /^https?:\/\/\S+$/.test(userMessage.trim())) {
       const previewUrl = userMessage.trim();
+      await _sendText(sock, jid, `📸 Tomando screenshot de la página, un momento...`);
       typingInterval = _startPersistentTyping(sock, jid);
       try {
         const [imgBuf, scraped] = await Promise.all([

@@ -195,6 +195,62 @@ function detectNaturalIntent(text) {
     return { intent: 'qr', params: { data: qrCodigo[1].trim() } };
   }
 
+  // ==========================================================
+  // CHART — "cómo va bitcoin", "precio de ethereum", "gráfica de BTC"
+  // Activa precio + gráfica TradingView para criptos y acciones conocidas
+  // ==========================================================
+  const CHART_NAMES = {
+    // Criptos
+    bitcoin: 'BTC', btc: 'BTC',
+    ethereum: 'ETH', eth: 'ETH', ether: 'ETH',
+    solana: 'SOL', sol: 'SOL',
+    binance: 'BNB', bnb: 'BNB',
+    ripple: 'XRP', xrp: 'XRP',
+    cardano: 'ADA', ada: 'ADA',
+    dogecoin: 'DOGE', doge: 'DOGE',
+    polygon: 'MATIC', matic: 'MATIC',
+    avalanche: 'AVAX', avax: 'AVAX',
+    chainlink: 'LINK', link: 'LINK',
+    cosmos: 'ATOM', atom: 'ATOM',
+    litecoin: 'LTC', ltc: 'LTC',
+    near: 'NEAR',
+    toncoin: 'TON', ton: 'TON',
+    shiba: 'SHIB', shib: 'SHIB',
+    // Acciones
+    apple: 'AAPL', aapl: 'AAPL',
+    amazon: 'AMZN', amzn: 'AMZN',
+    google: 'GOOGL', googl: 'GOOGL', alphabet: 'GOOGL',
+    microsoft: 'MSFT', msft: 'MSFT',
+    tesla: 'TSLA', tsla: 'TSLA',
+    nvidia: 'NVDA', nvda: 'NVDA',
+    meta: 'META', facebook: 'META',
+    // FX
+    'dólar': 'USD', dolar: 'USD', dollar: 'USD', usd: 'USD',
+    euro: 'EUR', eur: 'EUR',
+    libra: 'GBP', gbp: 'GBP',
+  };
+
+  // Detectar si el mensaje menciona activos conocidos con verbos de consulta
+  const chartTriggers = /\b(cómo\s+va|como\s+va|cómo\s+está|como\s+esta|cómo\s+anda|como\s+anda|precio\s+de|qué\s+tal|que\s+tal|muéstrame|muestrame|dame\s+(la\s+)?(info|datos|gráfica?|precio)|gráfica?\s+de|grafica\s+de|chart\s+de|ver\s+el?|cuánto\s+vale|cuanto\s+vale|cuánto\s+está|cuanto\s+esta)\b/i;
+
+  if (chartTriggers.test(low)) {
+    for (const [name, symbol] of Object.entries(CHART_NAMES)) {
+      // Escapa el punto para regex y busca la palabra como token
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`\\b${escaped}\\b`, 'i').test(low)) {
+        return { intent: 'chart', params: { symbol, rawName: name } };
+      }
+    }
+  }
+
+  // También aceptar mensajes que sean solo el nombre del activo (ej: "bitcoin", "btc?", "ethereum!")
+  if (msg.length < 20) {
+    const clean = low.replace(/[?!.,¿¡]/g, '').trim();
+    if (CHART_NAMES[clean]) {
+      return { intent: 'chart', params: { symbol: CHART_NAMES[clean], rawName: clean } };
+    }
+  }
+
   return null;
 }
 
